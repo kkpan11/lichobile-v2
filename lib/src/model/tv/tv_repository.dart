@@ -1,48 +1,22 @@
-import 'package:riverpod_annotation/riverpod_annotation.dart';
-import 'package:logging/logging.dart';
-import 'package:result_extensions/result_extensions.dart';
-import 'package:lichess_mobile/src/utils/json.dart';
-import 'package:fast_immutable_collections/fast_immutable_collections.dart';
 import 'package:deep_pick/deep_pick.dart';
-
-import 'package:lichess_mobile/src/model/common/id.dart';
+import 'package:fast_immutable_collections/fast_immutable_collections.dart';
+import 'package:http/http.dart' as http;
 import 'package:lichess_mobile/src/model/common/chess.dart';
+import 'package:lichess_mobile/src/model/common/id.dart';
+import 'package:lichess_mobile/src/model/tv/tv_channel.dart';
+import 'package:lichess_mobile/src/model/tv/tv_game.dart';
 import 'package:lichess_mobile/src/model/user/user.dart';
-import 'package:lichess_mobile/src/constants.dart';
-import 'package:lichess_mobile/src/model/auth/auth_client.dart';
-
-import './tv_channel.dart';
-import './tv_game.dart';
-
-part 'tv_repository.g.dart';
+import 'package:lichess_mobile/src/network/http.dart';
 
 typedef TvChannels = IMap<TvChannel, TvGame>;
 
-@Riverpod(keepAlive: true)
-TvRepository tvRepository(TvRepositoryRef ref) {
-  final apiClient = ref.watch(authClientProvider);
-  return TvRepository(Logger('TvRepository'), apiClient: apiClient);
-}
-
 class TvRepository {
-  const TvRepository(
-    Logger log, {
-    required this.apiClient,
-  }) : _log = log;
+  const TvRepository(this.client);
 
-  final AuthClient apiClient;
-  final Logger _log;
+  final http.Client client;
 
-  FutureResult<TvChannels> channels() {
-    return apiClient
-        .get(Uri.parse('$kLichessHost/api/tv/channels'))
-        .flatMap((response) {
-      return readJsonObject(
-        response,
-        mapper: _tvGamesFromJson,
-        logger: _log,
-      );
-    });
+  Future<TvChannels> channels() {
+    return client.readJson(Uri(path: '/api/tv/channels'), mapper: _tvGamesFromJson);
   }
 }
 
@@ -55,12 +29,11 @@ TvChannels _tvGamesFromJson(Map<String, dynamic> json) {
   });
 }
 
-TvGame _tvGameFromJson(Map<String, dynamic> json) =>
-    _tvGameFromPick(pick(json).required());
+TvGame _tvGameFromJson(Map<String, dynamic> json) => _tvGameFromPick(pick(json).required());
 
 TvGame _tvGameFromPick(RequiredPick pick) => TvGame(
-      user: pick('user').asLightUserOrThrow(),
-      rating: pick('rating').asIntOrNull(),
-      id: pick('gameId').asGameIdOrThrow(),
-      side: pick('color').asSideOrNull(),
-    );
+  user: pick('user').asLightUserOrThrow(),
+  rating: pick('rating').asIntOrNull(),
+  id: pick('gameId').asGameIdOrThrow(),
+  side: pick('color').asSideOrNull(),
+);

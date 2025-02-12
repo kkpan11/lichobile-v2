@@ -1,113 +1,111 @@
+import 'dart:convert';
+
 import 'package:flutter/foundation.dart';
 import 'package:flutter/services.dart' show rootBundle;
-import 'package:riverpod_annotation/riverpod_annotation.dart';
-import 'package:soundpool/soundpool.dart';
-import 'package:fast_immutable_collections/fast_immutable_collections.dart';
-
-import 'package:lichess_mobile/src/app_dependencies.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:lichess_mobile/src/binding.dart';
 import 'package:lichess_mobile/src/model/settings/general_preferences.dart';
-import 'package:lichess_mobile/src/model/settings/sound_theme.dart';
+import 'package:lichess_mobile/src/model/settings/preferences_storage.dart';
+import 'package:logging/logging.dart';
+import 'package:riverpod_annotation/riverpod_annotation.dart';
+import 'package:sound_effect/sound_effect.dart';
 
 part 'sound_service.g.dart';
 
+final _soundEffectPlugin = SoundEffect();
+
+final _logger = Logger('SoundService');
+
 // Must match name of files in assets/sounds/standard
-enum Sound {
-  move,
-  capture,
-  lowTime,
-  dong,
-  error,
-  confirmation,
-  puzzleStormEnd,
-}
-
-typedef SoundMap = IMap<Sound, int>;
+enum Sound { move, capture, lowTime, dong, error, confirmation, puzzleStormEnd, clock }
 
 @Riverpod(keepAlive: true)
-SoundService soundService(SoundServiceRef ref) {
-  // requireValue is possible because appDependenciesProvider is loaded before
-  // anything. See: lib/src/app.dart
-  final deps = ref.read(appDependenciesProvider).requireValue;
-  final (pool, sounds) = deps.soundPool;
-  return SoundService(pool, sounds, ref);
+SoundService soundService(Ref ref) {
+  final service = SoundService(ref);
+  ref.onDispose(() => service.release());
+  return service;
 }
 
-@Riverpod(keepAlive: true)
-Future<(Soundpool, SoundMap)> soundPool(
-  SoundPoolRef ref,
-  SoundTheme theme,
-) async {
-  final pool = Soundpool.fromOptions(
-    options: const SoundpoolOptions(
-      iosOptions: SoundpoolOptionsIos(
-        enableRate: false,
-        audioSessionCategory: AudioSessionCategory.ambient,
-        audioSessionMode: AudioSessionMode.normal,
-      ),
-    ),
+final _extension = defaultTargetPlatform == TargetPlatform.iOS ? 'aifc' : 'mp3';
+
+const Set<Sound> _emtpySet = {};
+
+/// Loads all sounds of the given [SoundTheme].
+Future<void> _loadAllSounds(SoundTheme soundTheme, {Set<Sound> excluded = _emtpySet}) async {
+  await Future.wait(
+    Sound.values.where((s) => !excluded.contains(s)).map((sound) => _loadSound(soundTheme, sound)),
   );
-
-  ref.onDispose(pool.release);
-  final sounds = await loadSounds(pool, theme);
-
-  return (pool, sounds);
 }
 
-final extension = defaultTargetPlatform == TargetPlatform.iOS ? 'aifc' : 'mp3';
-
-Future<SoundMap> loadSounds(Soundpool pool, SoundTheme soundTheme) async {
-  await pool.release();
-  return IMap({
-    for (final sound in Sound.values)
-      sound: await rootBundle
-          .load('assets/sounds/${soundTheme.name}/${sound.name}.$extension')
-          // on iOS if aifc file is not found, load mp3
-          .catchError(
-            (_) => rootBundle
-                .load('assets/sounds/${soundTheme.name}/${sound.name}.mp3'),
-          )
-          // if not found, load standard theme sound
-          .catchError(
-            (_) => rootBundle.load('assets/sounds/standard/${sound.name}.mp3'),
-          )
-          .then((soundData) => pool.load(soundData)),
-  });
+/// Loads a single sound from the given [SoundTheme].
+Future<void> _loadSound(SoundTheme theme, Sound sound) async {
+  final themePath = 'assets/sounds/${theme.name}';
+  const standardPath = 'assets/sounds/standard';
+  final soundId = sound.name;
+  final file = '$soundId.$_extension';
+  String fullPath = '$themePath/$file';
+  // If the sound file is not found in the theme, fallback to the standard theme.
+  try {
+    await rootBundle.load(fullPath);
+  } catch (_) {
+    fullPath = '$standardPath/$file';
+  }
+  await _soundEffectPlugin.load(soundId, fullPath);
 }
 
+/// Service to play game sounds.
 class SoundService {
-  SoundService(this._pool, this._sounds, this._ref);
+  SoundService(this._ref);
 
-  final Soundpool _pool;
-  SoundMap _sounds;
-  final SoundServiceRef _ref;
+  final Ref _ref;
 
-  (int, Sound)? _currentStream;
-
-  Future<int?> play(Sound sound) async {
-    final isEnabled = _ref.read(generalPreferencesProvider).isSoundEnabled;
-    final soundId = _sounds[sound];
-    if (soundId != null && isEnabled) {
-      // Stop current sound only if it is a move or capture sound
-      if (_currentStream != null &&
-          _currentStream!.$1 > 0 &&
-          (_currentStream!.$2 == Sound.move ||
-              _currentStream!.$2 == Sound.capture)) {
-        await _pool.stop(_currentStream!.$1);
-      }
-      _currentStream = (await _pool.play(soundId), sound);
-      return _currentStream!.$1;
+  /// Initialize the sound service.
+  ///
+  /// This will load the sounds from assets and make them ready to be played.
+  /// This should be called once when the app starts.
+  static Future<void> initialize() async {
+    try {
+      final stored = LichessBinding.instance.sharedPreferences.getString(
+        PrefCategory.general.storageKey,
+      );
+      final theme =
+          (stored != null
+                  ? GeneralPrefs.fromJson(jsonDecode(stored) as Map<String, dynamic>)
+                  : GeneralPrefs.defaults)
+              .soundTheme;
+      await _soundEffectPlugin.initialize();
+      await _loadAllSounds(theme);
+    } catch (e) {
+      _logger.warning('Failed to initialize sound service: $e');
     }
-    return null;
   }
 
-  Future<void> stopCurrent() async {
-    if (_currentStream != null) return _pool.stop(_currentStream!.$1);
+  /// Play the given sound if sound is enabled.
+  Future<void> play(Sound sound) async {
+    final isEnabled = _ref.read(generalPreferencesProvider).isSoundEnabled;
+    final volume = _ref.read(generalPreferencesProvider).masterVolume;
+    if (!isEnabled || volume == 0.0) {
+      return;
+    }
+    _soundEffectPlugin.play(sound.name, volume: volume);
   }
 
+  /// Change the sound theme and optionally play a move sound.
+  ///
+  /// This will release the previous sounds and load the new ones.
+  ///
+  /// If [playSound] is true, a move sound will be played.
   Future<void> changeTheme(SoundTheme theme, {bool playSound = false}) async {
-    _sounds = await loadSounds(_pool, theme);
+    await _soundEffectPlugin.release();
+    await _soundEffectPlugin.initialize();
+    await _loadSound(theme, Sound.move);
     if (playSound) {
       play(Sound.move);
     }
+    await _loadAllSounds(theme, excluded: {Sound.move});
+  }
+
+  Future<void> release() async {
+    await _soundEffectPlugin.release();
   }
 }

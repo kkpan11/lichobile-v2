@@ -1,20 +1,30 @@
-import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter/cupertino.dart';
 import 'package:chessground/chessground.dart';
+import 'package:dartchess/dartchess.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
-import 'package:lichess_mobile/src/styles/styles.dart';
+import 'package:lichess_mobile/src/constants.dart';
 import 'package:lichess_mobile/src/model/settings/board_preferences.dart';
+import 'package:lichess_mobile/src/styles/styles.dart';
+import 'package:lichess_mobile/src/widgets/buttons.dart';
 
-class SmallBoardPreview extends ConsumerStatefulWidget {
+/// A board preview with a description.
+class SmallBoardPreview extends ConsumerWidget {
   const SmallBoardPreview({
     required this.orientation,
     required this.fen,
     required this.description,
+    this.padding,
     this.lastMove,
     this.onTap,
-  });
+  }) : _showLoadingPlaceholder = false;
+
+  const SmallBoardPreview.loading({this.padding})
+    : orientation = Side.white,
+      fen = kEmptyFEN,
+      lastMove = null,
+      description = const SizedBox.shrink(),
+      onTap = null,
+      _showLoadingPlaceholder = true;
 
   /// Side by which the board is oriented.
   final Side orientation;
@@ -29,73 +39,107 @@ class SmallBoardPreview extends ConsumerStatefulWidget {
 
   final GestureTapCallback? onTap;
 
-  @override
-  ConsumerState<SmallBoardPreview> createState() => _SmallBoardPreviewState();
-}
+  final EdgeInsetsGeometry? padding;
 
-class _SmallBoardPreviewState extends ConsumerState<SmallBoardPreview> {
-  bool _isPressed = false;
+  final bool _showLoadingPlaceholder;
 
   @override
-  Widget build(BuildContext context) {
+  Widget build(BuildContext context, WidgetRef ref) {
     final boardPrefs = ref.watch(boardPreferencesProvider);
 
     final content = LayoutBuilder(
       builder: (context, constraints) {
-        final boardSize = constraints.biggest.shortestSide * 0.40;
-        return Container(
-          decoration: BoxDecoration(
-            color: _isPressed
-                ? CupertinoDynamicColor.resolve(
-                    CupertinoColors.systemGrey5,
-                    context,
+        final boardSize =
+            constraints.biggest.shortestSide - (constraints.biggest.shortestSide / 1.618);
+        return Padding(
+          padding:
+              padding ??
+              Styles.horizontalBodyPadding.add(const EdgeInsets.symmetric(vertical: 8.0)),
+          child: SizedBox(
+            height: boardSize,
+            child: Row(
+              children: [
+                if (_showLoadingPlaceholder)
+                  Container(
+                    width: boardSize,
+                    height: boardSize,
+                    decoration: const BoxDecoration(
+                      color: Colors.black,
+                      borderRadius: Styles.boardBorderRadius,
+                    ),
                   )
-                : null,
-          ),
-          child: Padding(
-            padding: Styles.bodySectionPadding,
-            child: SizedBox(
-              height: boardSize,
-              child: Row(
-                children: [
-                  Board(
+                else
+                  StaticChessboard(
                     size: boardSize,
-                    data: BoardData(
-                      interactableSide: InteractableSide.none,
-                      fen: widget.fen,
-                      orientation: widget.orientation,
-                      lastMove: widget.lastMove,
-                    ),
-                    settings: BoardSettings(
-                      enableCoordinates: false,
-                      animationDuration: const Duration(milliseconds: 150),
-                      pieceAssets: boardPrefs.pieceSet.assets,
-                      colorScheme: boardPrefs.boardTheme.colors,
-                    ),
+                    fen: fen,
+                    orientation: orientation,
+                    lastMove: lastMove as NormalMove?,
+                    pieceAssets: boardPrefs.pieceSet.assets,
+                    colorScheme: boardPrefs.boardTheme.colors,
+                    brightness: boardPrefs.brightness,
+                    hue: boardPrefs.hue,
+                    enableCoordinates: false,
+                    borderRadius: Styles.boardBorderRadius,
+                    boxShadow: boardShadows,
+                    animationDuration: const Duration(milliseconds: 150),
                   ),
-                  const SizedBox(width: 10.0),
-                  Expanded(child: widget.description),
-                ],
-              ),
+                const SizedBox(width: 10.0),
+                if (_showLoadingPlaceholder)
+                  Expanded(
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                      children: [
+                        Column(
+                          crossAxisAlignment: CrossAxisAlignment.start,
+                          children: [
+                            Container(
+                              height: 16.0,
+                              width: double.infinity,
+                              decoration: const BoxDecoration(
+                                color: Colors.black,
+                                borderRadius: Styles.boardBorderRadius,
+                              ),
+                            ),
+                            const SizedBox(height: 4.0),
+                            Container(
+                              height: 16.0,
+                              width: MediaQuery.sizeOf(context).width / 3,
+                              decoration: const BoxDecoration(
+                                color: Colors.black,
+                                borderRadius: Styles.boardBorderRadius,
+                              ),
+                            ),
+                          ],
+                        ),
+                        Container(
+                          height: 44.0,
+                          width: 44.0,
+                          decoration: const BoxDecoration(
+                            color: Colors.black,
+                            borderRadius: Styles.boardBorderRadius,
+                          ),
+                        ),
+                        Container(
+                          height: 16.0,
+                          width: double.infinity,
+                          decoration: const BoxDecoration(
+                            color: Colors.black,
+                            borderRadius: Styles.boardBorderRadius,
+                          ),
+                        ),
+                      ],
+                    ),
+                  )
+                else
+                  Expanded(child: description),
+              ],
             ),
           ),
         );
       },
     );
 
-    return widget.onTap != null
-        ? defaultTargetPlatform == TargetPlatform.iOS
-            ? GestureDetector(
-                onTapDown: (_) => setState(() => _isPressed = true),
-                onTapUp: (_) => setState(() => _isPressed = false),
-                onTapCancel: () => setState(() => _isPressed = false),
-                onTap: widget.onTap,
-                child: content,
-              )
-            : InkWell(
-                onTap: widget.onTap,
-                child: content,
-              )
-        : content;
+    return onTap != null ? AdaptiveInkWell(onTap: onTap, child: content) : content;
   }
 }

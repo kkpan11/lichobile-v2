@@ -1,8 +1,9 @@
-import 'package:flutter/foundation.dart';
+import 'dart:math';
+
+import 'package:collection/collection.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
-import 'package:collection/collection.dart';
-
+import 'package:lichess_mobile/src/constants.dart';
 import 'package:lichess_mobile/src/utils/l10n_context.dart';
 
 /// A action bottom sheet that adapts to the platform (Android/iOS).
@@ -19,7 +20,7 @@ Future<T?> showAdaptiveActionSheet<T>({
   required List<BottomSheetAction> actions,
   bool isDismissible = true,
 }) async {
-  if (defaultTargetPlatform == TargetPlatform.iOS) {
+  if (Theme.of(context).platform == TargetPlatform.iOS) {
     return showCupertinoActionSheet(
       context: context,
       title: title,
@@ -36,6 +37,54 @@ Future<T?> showAdaptiveActionSheet<T>({
   }
 }
 
+Future<T?> showConfirmDialog<T>(
+  BuildContext context, {
+  required Widget title,
+  required void Function(BuildContext context) onConfirm,
+
+  /// Only for iOS
+  bool isDestructiveAction = false,
+}) {
+  if (Theme.of(context).platform == TargetPlatform.iOS) {
+    return showCupertinoActionSheet(
+      context: context,
+      actions: [
+        BottomSheetAction(
+          makeLabel: (_) => title,
+          isDestructiveAction: isDestructiveAction,
+          onPressed: onConfirm,
+        ),
+      ],
+    );
+  } else {
+    return showDialog(
+      context: context,
+      builder: (BuildContext context) {
+        return AlertDialog(
+          title: title,
+          actions: <Widget>[
+            TextButton(
+              style: TextButton.styleFrom(textStyle: TextTheme.of(context).labelLarge),
+              child: Text(context.l10n.cancel),
+              onPressed: () {
+                Navigator.of(context).pop();
+              },
+            ),
+            TextButton(
+              style: TextButton.styleFrom(textStyle: TextTheme.of(context).labelLarge),
+              child: Text(context.l10n.mobileOkButton),
+              onPressed: () {
+                Navigator.of(context).pop();
+                onConfirm(context);
+              },
+            ),
+          ],
+        );
+      },
+    );
+  }
+}
+
 Future<T?> showCupertinoActionSheet<T>({
   required BuildContext context,
   Widget? title,
@@ -48,20 +97,29 @@ Future<T?> showCupertinoActionSheet<T>({
     builder: (BuildContext context) {
       return CupertinoActionSheet(
         title: title,
-        actions: actions
-            .map(
-              (action) => CupertinoActionSheetAction(
-                onPressed: () {
-                  action.onPressed(context);
-                  if (action.dismissOnPress) {
-                    Navigator.of(context).pop();
-                  }
-                },
-                isDestructiveAction: action.isDestructiveAction,
-                child: action.label,
-              ),
-            )
-            .toList(),
+        actions:
+            actions
+                .map(
+                  // Builder is used to retrieve the context immediately surrounding the button
+                  // This is necessary to get the correct context for the iPad share dialog
+                  // which needs the position of the action to display the share dialog
+                  (action) => Builder(
+                    builder: (context) {
+                      return CupertinoActionSheetAction(
+                        onPressed: () {
+                          if (action.dismissOnPress) {
+                            Navigator.of(context).pop();
+                          }
+                          action.onPressed(context);
+                        },
+                        isDestructiveAction: action.isDestructiveAction,
+                        isDefaultAction: action.isDefaultAction,
+                        child: action.makeLabel(context),
+                      );
+                    },
+                  ),
+                )
+                .toList(),
         cancelButton: CupertinoActionSheetAction(
           isDefaultAction: true,
           onPressed: () {
@@ -80,67 +138,63 @@ Future<T?> showMaterialActionSheet<T>({
   required List<BottomSheetAction> actions,
   bool isDismissible = true,
 }) {
-  final defaultTextStyle =
-      Theme.of(context).textTheme.titleMedium ?? const TextStyle(fontSize: 20);
+  final actionTextStyle = TextTheme.of(context).titleMedium ?? const TextStyle(fontSize: 18);
+
+  final screenWidth = MediaQuery.of(context).size.width;
   return showDialog<T>(
     context: context,
     barrierDismissible: isDismissible,
     builder: (BuildContext context) {
       return Dialog(
-        child: SingleChildScrollView(
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.stretch,
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              if (title != null) ...[
-                Padding(
-                  padding: const EdgeInsets.all(16.0),
-                  child: Center(child: title),
-                ),
-              ],
-              ...actions.mapIndexed<Widget>((index, action) {
-                return InkWell(
-                  borderRadius: BorderRadius.vertical(
-                    top: Radius.circular(
-                      index == 0 ? 28 : 0,
+        child: SizedBox(
+          width: min(screenWidth, kMaterialPopupMenuMaxWidth),
+          child: SingleChildScrollView(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              mainAxisSize: MainAxisSize.min,
+              children: <Widget>[
+                if (title != null) ...[
+                  Padding(padding: const EdgeInsets.all(16.0), child: Center(child: title)),
+                ],
+                ...actions.mapIndexed<Widget>((index, action) {
+                  return InkWell(
+                    borderRadius: BorderRadius.vertical(
+                      top: Radius.circular(index == 0 ? 28 : 0),
+                      bottom: Radius.circular(index == actions.length - 1 ? 28 : 0),
                     ),
-                    bottom: Radius.circular(
-                      index == actions.length - 1 ? 28 : 0,
-                    ),
-                  ),
-                  onTap: () {
-                    action.onPressed(context);
-                    if (action.dismissOnPress) {
-                      Navigator.of(context).pop();
-                    }
-                  },
-                  child: Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Row(
-                      children: [
-                        if (action.leading != null) ...[
-                          action.leading!,
-                          const SizedBox(width: 15),
-                        ],
-                        Expanded(
-                          child: DefaultTextStyle(
-                            style: defaultTextStyle,
-                            textAlign: action.leading != null
-                                ? TextAlign.start
-                                : TextAlign.center,
-                            child: action.label,
+                    onTap: () {
+                      if (action.dismissOnPress) {
+                        Navigator.of(context).pop();
+                      }
+                      action.onPressed(context);
+                    },
+                    child: Padding(
+                      padding: const EdgeInsets.all(16.0),
+                      child: Row(
+                        children: [
+                          if (action.leading != null) ...[
+                            action.leading!,
+                            const SizedBox(width: 15),
+                          ],
+                          Expanded(
+                            child: DefaultTextStyle(
+                              style: actionTextStyle,
+                              textAlign:
+                                  action.leading != null ? TextAlign.start : TextAlign.center,
+                              child: action.makeLabel(context),
+                            ),
                           ),
-                        ),
-                        if (action.trailing != null) ...[
-                          const SizedBox(width: 10),
-                          action.trailing!,
+                          if (action.trailing != null) ...[
+                            const SizedBox(width: 10),
+                            action.trailing!,
+                          ],
                         ],
-                      ],
+                      ),
                     ),
-                  ),
-                );
-              }),
-            ],
+                  );
+                }),
+              ],
+            ),
           ),
         ),
       );
@@ -150,13 +204,13 @@ Future<T?> showMaterialActionSheet<T>({
 
 /// The Actions model that will use on the ActionSheet.
 class BottomSheetAction {
-  /// The primary content of the action sheet.
+  /// A function that returns the label widget. (required)
   ///
   /// Typically a [Text] widget.
   ///
   /// This should not wrap. To enforce the single line limit, use
   /// [Text.maxLines].
-  final Widget label;
+  final Widget Function(BuildContext context) makeLabel;
 
   /// The callback that is called when the action item is tapped. (required)
   final void Function(BuildContext context) onPressed;
@@ -168,22 +222,27 @@ class BottomSheetAction {
 
   /// A widget to display after the label.
   ///
-  /// Typically an [Icon] widget. Only for android.
+  /// Typically an [Icon] widget. (Android only).
   final Widget? trailing;
 
   /// A widget to display before the label.
   ///
-  /// Typically an [Icon] or a [CircleAvatar] widget. Only for android.
+  /// Typically an [Icon] or a [CircleAvatar] widget. (Android only).
   final Widget? leading;
 
+  /// Whether the action is destructive. (iOS only).
   final bool isDestructiveAction;
 
+  /// Whether the action is the default action. (iOS only).
+  final bool isDefaultAction;
+
   BottomSheetAction({
-    required this.label,
+    required this.makeLabel,
     required this.onPressed,
     this.dismissOnPress = true,
     this.trailing,
     this.leading,
     this.isDestructiveAction = false,
+    this.isDefaultAction = false,
   });
 }

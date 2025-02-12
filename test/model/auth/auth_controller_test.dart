@@ -1,21 +1,22 @@
-import 'package:async/async.dart';
-import 'package:flutter_test/flutter_test.dart';
-import 'package:mocktail/mocktail.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_appauth/flutter_appauth.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:flutter_test/flutter_test.dart';
 import 'package:http/testing.dart';
-
-import 'package:lichess_mobile/src/http_client.dart';
-import 'package:lichess_mobile/src/model/common/id.dart';
 import 'package:lichess_mobile/src/model/auth/auth_controller.dart';
-import 'package:lichess_mobile/src/model/auth/auth_session.dart';
 import 'package:lichess_mobile/src/model/auth/auth_repository.dart';
+import 'package:lichess_mobile/src/model/auth/auth_session.dart';
 import 'package:lichess_mobile/src/model/auth/session_storage.dart';
+import 'package:lichess_mobile/src/model/common/id.dart';
 import 'package:lichess_mobile/src/model/user/user.dart';
-import '../../test_utils.dart';
-import '../../test_container.dart';
+import 'package:lichess_mobile/src/network/http.dart';
+import 'package:mocktail/mocktail.dart';
 
-class MockAuthRepository extends Mock implements AuthRepository {}
+import '../../mock_server_responses.dart';
+import '../../network/fake_http_client_factory.dart';
+import '../../test_container.dart';
+import '../../test_helpers.dart';
+
+class MockFlutterAppAuth extends Mock implements FlutterAppAuth {}
 
 class MockSessionStorage extends Mock implements SessionStorage {}
 
@@ -25,54 +26,57 @@ class Listener<T> extends Mock {
 
 void main() {
   final mockSessionStorage = MockSessionStorage();
-  final mockAuthRepository = MockAuthRepository();
+  final mockFlutterAppAuth = MockFlutterAppAuth();
 
-  final mockClient = MockClient((request) {
+  const testUserSession = AuthSessionState(
+    token: 'testToken',
+    user: LightUser(id: UserId('test'), name: 'test', title: 'GM', isPatron: true),
+  );
+  const loading = AsyncLoading<void>();
+  const nullData = AsyncData<void>(null);
+
+  final client = MockClient((request) {
     if (request.url.path == '/api/account') {
-      return mockResponse(testAccountResponse, 200);
+      return mockResponse(mockApiAccountResponse(testUserSession.user.name), 200);
     } else if (request.method == 'DELETE' && request.url.path == '/api/token') {
+      return mockResponse('ok', 200);
+    } else if (request.method == 'POST' && request.url.path == '/mobile/unregister') {
       return mockResponse('ok', 200);
     }
     return mockResponse('', 404);
   });
 
-  const testUserSession = AuthSessionState(
-    token: 'testToken',
-    user: LightUser(
-      id: UserId('test'),
-      name: 'test',
-      title: 'GM',
-      isPatron: true,
-    ),
-  );
-  const loading = AsyncLoading<void>();
-  const nullData = AsyncData<void>(null);
-
   setUpAll(() {
+    registerFallbackValue(
+      AuthorizationTokenRequest(
+        'testClientId',
+        'testRedirectUrl',
+        discoveryUrl: 'testDiscoveryUrl',
+        scopes: ['testScope'],
+      ),
+    );
     registerFallbackValue(testUserSession);
     registerFallbackValue(const AsyncLoading<void>());
   });
 
   setUp(() {
-    reset(mockAuthRepository);
+    reset(mockFlutterAppAuth);
     reset(mockSessionStorage);
   });
 
   group('AuthController', () {
     test('sign in', () async {
-      when(() => mockSessionStorage.read())
-          .thenAnswer((_) => delayedAnswer(null));
-      when(() => mockAuthRepository.signIn())
-          .thenAnswer((_) => delayedAnswer(signInResponse));
+      when(() => mockSessionStorage.read()).thenAnswer((_) => Future.value(null));
       when(
-        () => mockSessionStorage.write(any()),
-      ).thenAnswer((_) => delayedAnswer(null));
+        () => mockFlutterAppAuth.authorizeAndExchangeCode(any()),
+      ).thenAnswer((_) => Future.value(signInResponse));
+      when(() => mockSessionStorage.write(any())).thenAnswer((_) => Future.value(null));
 
       final container = await makeContainer(
         overrides: [
-          authRepositoryProvider.overrideWithValue(mockAuthRepository),
+          appAuthProvider.overrideWithValue(mockFlutterAppAuth),
           sessionStorageProvider.overrideWithValue(mockSessionStorage),
-          httpClientProvider.overrideWithValue(mockClient),
+          httpClientFactoryProvider.overrideWith((_) => FakeHttpClientFactory(() => client)),
         ],
       );
 
@@ -96,29 +100,36 @@ void main() {
         () => listener(loading, nullData),
       ]);
       verifyNoMoreInteractions(listener);
-      verify(mockAuthRepository.signIn).called(1);
 
       // it should successfully write the session
-      verify(
-        () => mockSessionStorage.write(testUserSession),
-      ).called(1);
+      verify(() => mockSessionStorage.write(testUserSession)).called(1);
     });
 
     test('sign out', () async {
-      when(() => mockSessionStorage.read())
-          .thenAnswer((_) => delayedAnswer(testUserSession));
-      when(() => mockAuthRepository.signOut())
-          .thenAnswer((_) => delayedAnswer(Result.value(null)));
-      when(
-        () => mockSessionStorage.delete(),
-      ).thenAnswer((_) => delayedAnswer(null));
+      when(() => mockSessionStorage.read()).thenAnswer((_) => Future.value(testUserSession));
+      when(() => mockSessionStorage.delete()).thenAnswer((_) => Future.value(null));
+
+      int tokenDeleteCount = 0;
+      int unregisterCount = 0;
+
+      final client = MockClient((request) {
+        if (request.method == 'DELETE' && request.url.path == '/api/token') {
+          tokenDeleteCount++;
+          return mockResponse('ok', 200);
+        } else if (request.method == 'POST' && request.url.path == '/mobile/unregister') {
+          unregisterCount++;
+          return mockResponse('ok', 200);
+        }
+        return mockResponse('', 404);
+      });
 
       final container = await makeContainer(
         overrides: [
-          authRepositoryProvider.overrideWithValue(mockAuthRepository),
+          appAuthProvider.overrideWithValue(mockFlutterAppAuth),
           sessionStorageProvider.overrideWithValue(mockSessionStorage),
-          httpClientProvider.overrideWithValue(mockClient),
+          httpClientFactoryProvider.overrideWith((_) => FakeHttpClientFactory(() => client)),
         ],
+        userSession: testUserSession,
       );
 
       final listener = Listener<AsyncValue<void>>();
@@ -141,65 +152,23 @@ void main() {
         () => listener(loading, nullData),
       ]);
       verifyNoMoreInteractions(listener);
-      verify(mockAuthRepository.signOut).called(1);
+
+      expect(tokenDeleteCount, 1, reason: 'token should be deleted');
+      expect(unregisterCount, 1, reason: 'device should be unregistered');
 
       // session should be deleted
-      verify(
-        () => mockSessionStorage.delete(),
-      ).called(1);
+      verify(() => mockSessionStorage.delete()).called(1);
     });
   });
 }
 
-const testAccountResponse = '''
-{
-  "id": "test",
-  "username": "test",
-  "createdAt": 1290415680000,
-  "seenAt": 1290415680000,
-  "title": "GM",
-  "patron": true,
-  "perfs": {
-    "blitz": {
-      "games": 2340,
-      "rating": 1681,
-      "rd": 30,
-      "prog": 10
-    },
-    "rapid": {
-      "games": 2340,
-      "rating": 1677,
-      "rd": 30,
-      "prog": 10
-    },
-    "classical": {
-      "games": 2340,
-      "rating": 1618,
-      "rd": 30,
-      "prog": 10
-    }
-  },
-  "profile": {
-    "country": "France",
-    "location": "Lille",
-    "bio": "test bio",
-    "firstName": "John",
-    "lastName": "Doe",
-    "fideRating": 1800,
-    "links": "http://test.com"
-  }
-}
-''';
-
-final signInResponse = Result.value(
-  AuthorizationTokenResponse(
-    'testToken',
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-    null,
-  ),
+final signInResponse = AuthorizationTokenResponse(
+  'testToken',
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
+  null,
 );

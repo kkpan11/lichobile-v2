@@ -1,92 +1,69 @@
-import 'dart:convert';
-import 'package:async/async.dart';
-import 'package:http/http.dart';
-import 'package:logging/logging.dart';
+import 'dart:ui' show Color, Locale;
+
 import 'package:deep_pick/deep_pick.dart';
-import 'package:fast_immutable_collections/fast_immutable_collections.dart';
-import 'package:result_extensions/result_extensions.dart';
+import 'package:json_annotation/json_annotation.dart';
+import 'package:lichess_mobile/src/model/common/uci.dart';
 
-import 'package:lichess_mobile/src/model/common/errors.dart';
+class LocaleConverter implements JsonConverter<Locale?, Map<String, dynamic>?> {
+  const LocaleConverter();
 
-typedef Mapper<T> = T Function(Map<String, dynamic>);
-
-/// Reads a [T] object from a [Response] returning a JSON object.
-Result<T> readJsonObject<T>(
-  Response response, {
-  required Mapper<T> mapper,
-  Logger? logger,
-}) {
-  final result = Result(() {
-    final dynamic obj = jsonDecode(utf8.decode(response.bodyBytes));
-    if (obj is! Map<String, dynamic>) {
-      logger?.severe('Could not read json object as $T: expected an object.');
-      throw DataFormatException();
+  @override
+  Locale? fromJson(Map<String, dynamic>? json) {
+    if (json == null) {
+      return null;
     }
-    return mapper(obj);
-  });
-  result.match(
-    onError: (error, st) {
-      logger?.severe('Could not read json object as $T: $error\n$st');
-    },
-  );
-  return result;
+    return Locale.fromSubtags(
+      languageCode: json['languageCode'] as String,
+      countryCode: json['countryCode'] as String?,
+      scriptCode: json['scriptCode'] as String?,
+    );
+  }
+
+  @override
+  Map<String, dynamic>? toJson(Locale? locale) {
+    return locale != null
+        ? {
+          'languageCode': locale.languageCode,
+          'countryCode': locale.countryCode,
+          'scriptCode': locale.scriptCode,
+        }
+        : null;
+  }
 }
 
-/// Reads a list of [T] objects from a [Response] returning a JSON array.
-Result<IList<T>> readJsonListOfObjects<T>(
-  Response response, {
-  required Mapper<T> mapper,
-  Logger? logger,
-}) {
-  final result = Result(() {
-    final dynamic list = jsonDecode(utf8.decode(response.bodyBytes));
-    if (list is! List<dynamic>) {
-      logger?.severe('Received json is not a list');
-      throw DataFormatException();
-    }
-    return IList(
-      list.map((e) {
-        if (e is! Map<String, dynamic>) {
-          logger?.severe('Could not read json object as $T');
-          throw DataFormatException();
-        }
-        return mapper(e);
-      }),
-    );
-  });
-  result.match(
-    onError: (error, st) =>
-        logger?.severe('Could not read json as list of $T: $error\n$st'),
-  );
-  return result;
+class ColorConverter implements JsonConverter<Color?, Map<String, dynamic>?> {
+  const ColorConverter();
+
+  @override
+  Color? fromJson(Map<String, dynamic>? json) {
+    return json != null
+        ? Color.from(
+          alpha: json['a'] as double,
+          red: json['r'] as double,
+          green: json['g'] as double,
+          blue: json['b'] as double,
+        )
+        : null;
+  }
+
+  @override
+  Map<String, dynamic>? toJson(Color? color) {
+    return color != null ? {'a': color.a, 'r': color.r, 'g': color.g, 'b': color.b} : null;
+  }
 }
 
-/// Reads a list of [T] objects from a newline-delimited json [Response].
-Result<IList<T>> readNdJsonList<T>(
-  Response response, {
-  required Mapper<T> mapper,
-  Logger? logger,
-}) {
-  final result = Result(() {
-    final utf8Body = utf8.decode(response.bodyBytes);
-    final lines = utf8Body.split('\n');
-    return IList(
-      lines.where((e) => e.isNotEmpty && e != '\n').map((e) {
-        final json = jsonDecode(e);
-        if (json is! Map<String, dynamic>) {
-          logger
-              ?.severe('Could not read json object as $T: expected an object.');
-          throw DataFormatException();
-        }
-        return mapper(json);
-      }),
-    );
-  });
-  result.match(
-    onError: (error, st) =>
-        logger?.severe('Could not read ndjson as list of $T: $error\n$st'),
-  );
-  return result;
+extension UciExtension on Pick {
+  /// Matches a UciCharPair from a string.
+  UciCharPair asUciCharPairOrThrow() {
+    final value = required().asStringOrThrow();
+    return UciCharPair.fromStringId(value);
+  }
+
+  /// Matches a UciPath from a string.
+  UciPath asUciPathOrThrow() {
+    final value = required().asStringOrThrow();
+    return UciPath(value);
+  }
 }
 
 extension TimeExtension on Pick {
@@ -97,11 +74,9 @@ extension TimeExtension on Pick {
       return value;
     }
     if (value is int) {
-      return DateTime.fromMillisecondsSinceEpoch(value, isUtc: true);
+      return DateTime.fromMillisecondsSinceEpoch(value);
     }
-    throw PickException(
-      "value $value at $debugParsingExit can't be casted to DateTime",
-    );
+    throw PickException("value $value at $debugParsingExit can't be casted to DateTime");
   }
 
   /// Matches a DateTime from milliseconds since unix epoch.
@@ -125,9 +100,7 @@ extension TimeExtension on Pick {
     } else if (value is double) {
       return Duration(milliseconds: (value * 1000).toInt());
     }
-    throw PickException(
-      "value $value at $debugParsingExit can't be casted to Duration",
-    );
+    throw PickException("value $value at $debugParsingExit can't be casted to Duration");
   }
 
   /// Matches a Duration from seconds
@@ -135,6 +108,27 @@ extension TimeExtension on Pick {
     if (value == null) return null;
     try {
       return asDurationFromSecondsOrThrow();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  /// Matches a Duration from centiseconds
+  Duration asDurationFromCentiSecondsOrThrow() {
+    final value = required().value;
+    if (value is Duration) {
+      return value;
+    }
+    if (value is int) {
+      return Duration(milliseconds: value * 10);
+    }
+    throw PickException("value $value at $debugParsingExit can't be casted to Duration");
+  }
+
+  Duration? asDurationFromCentiSecondsOrNull() {
+    if (value == null) return null;
+    try {
+      return asDurationFromCentiSecondsOrThrow();
     } catch (_) {
       return null;
     }
@@ -149,9 +143,7 @@ extension TimeExtension on Pick {
     if (value is int) {
       return Duration(milliseconds: value);
     }
-    throw PickException(
-      "value $value at $debugParsingExit can't be casted to Duration",
-    );
+    throw PickException("value $value at $debugParsingExit can't be casted to Duration");
   }
 
   Duration? asDurationFromMilliSecondsOrNull() {

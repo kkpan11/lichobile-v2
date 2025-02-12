@@ -1,28 +1,28 @@
 import 'dart:convert';
 
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lichess_mobile/src/db/database.dart';
 import 'package:lichess_mobile/src/model/common/id.dart';
 import 'package:lichess_mobile/src/model/puzzle/puzzle.dart';
-import 'package:sqflite/sqflite.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
+import 'package:sqflite/sqflite.dart';
 
 part 'puzzle_storage.g.dart';
 
 @Riverpod(keepAlive: true)
-PuzzleStorage puzzleStorage(PuzzleStorageRef ref) {
-  final db = ref.watch(databaseProvider);
+Future<PuzzleStorage> puzzleStorage(Ref ref) async {
+  final db = await ref.watch(databaseProvider.future);
   return PuzzleStorage(db);
 }
 
 const _tableName = 'puzzle';
 
+/// Local storage for puzzles.
 class PuzzleStorage {
   const PuzzleStorage(this._db);
   final Database _db;
 
-  Future<Puzzle?> fetch({
-    required PuzzleId puzzleId,
-  }) async {
+  Future<Puzzle?> fetch({required PuzzleId puzzleId}) async {
     final list = await _db.query(
       _tableName,
       where: 'puzzleId = ?',
@@ -43,17 +43,11 @@ class PuzzleStorage {
     return null;
   }
 
-  Future<void> save({
-    required Puzzle puzzle,
-  }) async {
-    await _db.insert(
-      _tableName,
-      {
-        'puzzleId': puzzle.puzzle.id.toString(),
-        'lastModified': DateTime.now().toIso8601String(),
-        'data': jsonEncode(puzzle.toJson()),
-      },
-      conflictAlgorithm: ConflictAlgorithm.replace,
-    );
+  Future<void> save({required Puzzle puzzle}) async {
+    await _db.insert(_tableName, {
+      'puzzleId': puzzle.puzzle.id.toString(),
+      'lastModified': DateTime.now().toIso8601String(),
+      'data': jsonEncode(puzzle.toJson()),
+    }, conflictAlgorithm: ConflictAlgorithm.replace);
   }
 }

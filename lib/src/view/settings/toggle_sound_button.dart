@@ -1,46 +1,46 @@
-import 'package:flutter/foundation.dart';
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
-import 'package:lichess_mobile/src/widgets/buttons.dart';
 import 'package:lichess_mobile/src/model/settings/general_preferences.dart';
+import 'package:lichess_mobile/src/utils/l10n_context.dart';
+import 'package:lichess_mobile/src/widgets/buttons.dart';
 
+/// A button that toggles the sound on and off.
 class ToggleSoundButton extends ConsumerWidget {
+  const ToggleSoundButton({super.key});
+
   @override
   Widget build(BuildContext context, WidgetRef ref) {
     final isSoundEnabled = ref.watch(
-      generalPreferencesProvider.select(
-        (prefs) => prefs.isSoundEnabled,
-      ),
+      generalPreferencesProvider.select((prefs) => prefs.isSoundEnabled),
     );
 
-    switch (defaultTargetPlatform) {
-      case TargetPlatform.android:
-        return IconButton(
-          // TODO translate
-          tooltip: 'Toggle sound',
-          icon: isSoundEnabled
-              ? const Icon(Icons.volume_up)
-              : const Icon(Icons.volume_off),
-          onPressed: () => ref
-              .read(generalPreferencesProvider.notifier)
-              .toggleSoundEnabled(),
-        );
-      case TargetPlatform.iOS:
-        return CupertinoIconButton(
-          padding: EdgeInsets.zero,
-          semanticsLabel: 'Toggle sound',
-          icon: isSoundEnabled
-              ? const Icon(CupertinoIcons.volume_up)
-              : const Icon(CupertinoIcons.volume_off),
-          onPressed: () => ref
-              .read(generalPreferencesProvider.notifier)
-              .toggleSoundEnabled(),
-        );
-      default:
-        assert(false, 'Unexpected platform $defaultTargetPlatform');
-        return const SizedBox.shrink();
-    }
+    return AppBarIconButton(
+      // TODO: i18n
+      semanticsLabel: 'Toggle sound',
+      onPressed: () => ref.read(generalPreferencesProvider.notifier).toggleSoundEnabled(),
+      icon: Icon(isSoundEnabled ? Icons.volume_up : Icons.volume_off),
+    );
+  }
+}
+
+/// A menu item button that toggles the sound on and off.
+class ToggleSoundMenuItemButton extends ConsumerWidget {
+  const ToggleSoundMenuItemButton({super.key});
+
+  @override
+  Widget build(BuildContext context, WidgetRef ref) {
+    final isSoundEnabled = ref.watch(
+      generalPreferencesProvider.select((prefs) => prefs.isSoundEnabled),
+    );
+
+    return MenuItemButton(
+      closeOnActivate: false,
+      leadingIcon: Icon(isSoundEnabled ? Icons.volume_up : Icons.volume_off),
+      semanticsLabel: context.l10n.sound,
+      child: Text(context.l10n.sound),
+      onPressed: () {
+        ref.read(generalPreferencesProvider.notifier).toggleSoundEnabled();
+      },
+    );
   }
 }

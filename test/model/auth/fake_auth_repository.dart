@@ -1,37 +1,7 @@
-import 'package:async/async.dart';
-import 'package:result_extensions/result_extensions.dart';
 import 'package:fast_immutable_collections/fast_immutable_collections.dart';
-import 'package:flutter_appauth/flutter_appauth.dart';
-
-import 'package:lichess_mobile/src/model/common/perf.dart';
 import 'package:lichess_mobile/src/model/common/id.dart';
+import 'package:lichess_mobile/src/model/common/perf.dart';
 import 'package:lichess_mobile/src/model/user/user.dart';
-import 'package:lichess_mobile/src/model/auth/auth_repository.dart';
-
-class FakeAuthRepository implements AuthRepository {
-  @override
-  FutureResult<AuthorizationTokenResponse> signIn() async {
-    await Future<void>.delayed(const Duration(milliseconds: 5));
-    return Result.value(
-      AuthorizationTokenResponse(
-        'testToken',
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-        null,
-      ),
-    );
-  }
-
-  @override
-  FutureResult<void> signOut() async {
-    await Future<void>.delayed(const Duration(milliseconds: 5));
-    return Result.value(null);
-  }
-}
 
 final fakeUser = User(
   id: const UserId('test'),
@@ -58,9 +28,4 @@ final fakeUser = User(
   }),
 );
 
-const _fakePerf = UserPerf(
-  rating: 1500,
-  ratingDeviation: 0,
-  progression: 0,
-  numberOfGames: 0,
-);
+const _fakePerf = UserPerf(rating: 1500, ratingDeviation: 0, progression: 0, games: 0);

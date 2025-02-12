@@ -1,89 +1,147 @@
 import 'dart:async';
 
-import 'package:async/async.dart';
-import 'package:lichess_mobile/src/model/puzzle/puzzle_storage.dart';
-import 'package:lichess_mobile/src/model/puzzle/storm.dart';
-import 'package:riverpod_annotation/riverpod_annotation.dart';
 import 'package:fast_immutable_collections/fast_immutable_collections.dart';
-
-import 'package:lichess_mobile/src/model/common/id.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lichess_mobile/src/model/auth/auth_session.dart';
+import 'package:lichess_mobile/src/model/common/id.dart';
 import 'package:lichess_mobile/src/model/puzzle/puzzle.dart';
-import 'package:lichess_mobile/src/model/puzzle/puzzle_theme.dart';
-import 'package:lichess_mobile/src/model/puzzle/puzzle_repository.dart';
+import 'package:lichess_mobile/src/model/puzzle/puzzle_angle.dart';
 import 'package:lichess_mobile/src/model/puzzle/puzzle_batch_storage.dart';
+import 'package:lichess_mobile/src/model/puzzle/puzzle_opening.dart';
+import 'package:lichess_mobile/src/model/puzzle/puzzle_repository.dart';
 import 'package:lichess_mobile/src/model/puzzle/puzzle_service.dart';
+import 'package:lichess_mobile/src/model/puzzle/puzzle_storage.dart';
+import 'package:lichess_mobile/src/model/puzzle/puzzle_streak.dart';
+import 'package:lichess_mobile/src/model/puzzle/puzzle_theme.dart';
+import 'package:lichess_mobile/src/model/puzzle/storm.dart';
+import 'package:lichess_mobile/src/model/puzzle/streak_storage.dart';
+import 'package:lichess_mobile/src/network/http.dart';
 import 'package:lichess_mobile/src/utils/riverpod.dart';
+import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'puzzle_providers.g.dart';
 
 @riverpod
-Future<PuzzleContext?> nextPuzzle(
-  NextPuzzleRef ref,
-  PuzzleTheme theme,
-) {
+Future<PuzzleContext?> nextPuzzle(Ref ref, PuzzleAngle angle) async {
   final session = ref.watch(authSessionProvider);
-  // ignore: avoid_manual_providers_as_generated_provider_dependency
-  final puzzleService = ref.watch(defaultPuzzleServiceProvider);
-  final userId = session?.user.id;
-  return puzzleService.nextPuzzle(
-    userId: userId,
-    angle: theme,
+  final puzzleService = await ref.read(puzzleServiceFactoryProvider)(
+    queueLength: kPuzzleLocalQueueLength,
+  );
+  // useful for for preview puzzle list in puzzle tab (providers in a list can
+  // be invalidated multiple times when the user scrolls the list)
+  ref.cacheFor(const Duration(minutes: 1));
+
+  return puzzleService.nextPuzzle(userId: session?.user.id, angle: angle);
+}
+
+typedef InitialStreak = ({PuzzleStreak streak, Puzzle puzzle});
+
+/// Fetches the active streak from the local storage if available, otherwise fetches it from the server.
+@riverpod
+Future<InitialStreak> streak(Ref ref) async {
+  final session = ref.watch(authSessionProvider);
+  final streakStorage = ref.watch(streakStorageProvider(session?.user.id));
+  final activeStreak = await streakStorage.loadActiveStreak();
+  if (activeStreak != null) {
+    final puzzle = await ref.read(puzzleProvider(activeStreak.streak[activeStreak.index]).future);
+
+    return (streak: activeStreak, puzzle: puzzle);
+  }
+
+  final rsp = await ref.withClient((client) => PuzzleRepository(client).streak());
+
+  return (
+    streak: PuzzleStreak(
+      streak: rsp.streak,
+      index: 0,
+      hasSkipped: false,
+      finished: false,
+      timestamp: rsp.timestamp,
+    ),
+    puzzle: rsp.puzzle,
   );
 }
 
 @riverpod
-Future<PuzzleStreakResponse> streak(StreakRef ref) {
-  final repo = ref.watch(puzzleRepositoryProvider);
-  return Result.release(repo.streak());
+Future<PuzzleStormResponse> storm(Ref ref) {
+  return ref.withClient((client) => PuzzleRepository(client).storm());
 }
 
+/// Fetches a puzzle from the local storage if available, otherwise fetches it from the server.
 @riverpod
-Future<PuzzleStormResponse> storm(StormRef ref) {
-  final repo = ref.watch(puzzleRepositoryProvider);
-  return Result.release(repo.storm());
-}
-
-@Riverpod(keepAlive: true)
-Future<Puzzle> puzzle(PuzzleRef ref, PuzzleId id) async {
-  final puzzleStorage = ref.watch(puzzleStorageProvider);
+Future<Puzzle> puzzle(Ref ref, PuzzleId id) async {
+  final puzzleStorage = await ref.watch(puzzleStorageProvider.future);
   final puzzle = await puzzleStorage.fetch(puzzleId: id);
   if (puzzle != null) return puzzle;
-  final repo = ref.watch(puzzleRepositoryProvider);
-  return Result.release(repo.fetch(id));
-}
-
-@Riverpod(keepAlive: true)
-Future<Puzzle> dailyPuzzle(DailyPuzzleRef ref) {
-  final repo = ref.watch(puzzleRepositoryProvider);
-  return Result.release(repo.daily());
+  return ref.withClient((client) => PuzzleRepository(client).fetch(id));
 }
 
 @riverpod
-Future<ISet<PuzzleTheme>> savedThemes(SavedThemesRef ref) {
+Future<Puzzle> dailyPuzzle(Ref ref) {
+  return ref.withClientCacheFor(
+    (client) => PuzzleRepository(client).daily(),
+    const Duration(hours: 6),
+  );
+}
+
+@riverpod
+Future<IList<(PuzzleAngle, int)>> savedBatches(Ref ref) async {
   final session = ref.watch(authSessionProvider);
-  final storage = ref.watch(puzzleBatchStorageProvider);
+  final storage = await ref.watch(puzzleBatchStorageProvider.future);
+  return storage.fetchAll(userId: session?.user.id);
+}
+
+@riverpod
+Future<IMap<PuzzleThemeKey, int>> savedThemeBatches(Ref ref) async {
+  final session = ref.watch(authSessionProvider);
+  final storage = await ref.watch(puzzleBatchStorageProvider.future);
   return storage.fetchSavedThemes(userId: session?.user.id);
 }
 
 @riverpod
-Future<PuzzleDashboard> puzzleDashboard(
-  PuzzleDashboardRef ref,
-  int days,
-) async {
-  final link = ref.cacheFor(const Duration(minutes: 5));
-  final repo = ref.watch(puzzleRepositoryProvider);
-  final result = await repo.puzzleDashboard(days);
-  if (result.isError) {
-    link.close();
-  }
-  return result.asFuture;
+Future<IMap<String, int>> savedOpeningBatches(Ref ref) async {
+  final session = ref.watch(authSessionProvider);
+  final storage = await ref.watch(puzzleBatchStorageProvider.future);
+  return storage.fetchSavedOpenings(userId: session?.user.id);
 }
 
 @riverpod
-Future<StormDashboard> stormDashboard(StormDashboardRef ref) {
-  ref.cacheFor(const Duration(minutes: 30));
+Future<PuzzleDashboard?> puzzleDashboard(Ref ref, int days) async {
   final session = ref.watch(authSessionProvider);
-  final repo = ref.watch(puzzleRepositoryProvider);
-  return Result.release(repo.stormDashboard(session!.user.id));
+  if (session == null) return null;
+  return ref.withClientCacheFor(
+    (client) => PuzzleRepository(client).puzzleDashboard(days),
+    const Duration(hours: 3),
+  );
+}
+
+@riverpod
+Future<IList<PuzzleHistoryEntry>?> puzzleRecentActivity(Ref ref) async {
+  final session = ref.watch(authSessionProvider);
+  if (session == null) return null;
+  return ref.withClientCacheFor(
+    (client) => PuzzleRepository(client).puzzleActivity(20),
+    const Duration(hours: 3),
+  );
+}
+
+@riverpod
+Future<StormDashboard?> stormDashboard(Ref ref, UserId id) async {
+  return ref.withClient((client) => PuzzleRepository(client).stormDashboard(id));
+}
+
+@riverpod
+Future<IMap<PuzzleThemeKey, PuzzleThemeData>> puzzleThemes(Ref ref) {
+  return ref.withClientCacheFor(
+    (client) => PuzzleRepository(client).puzzleThemes(),
+    const Duration(days: 1),
+  );
+}
+
+@riverpod
+Future<IList<PuzzleOpeningFamily>> puzzleOpenings(Ref ref) {
+  return ref.withClientCacheFor(
+    (client) => PuzzleRepository(client).puzzleOpenings(),
+    const Duration(days: 1),
+  );
 }

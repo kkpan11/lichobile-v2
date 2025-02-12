@@ -1,21 +1,19 @@
 import 'package:flutter/widgets.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
 
-import 'package:lichess_mobile/src/model/common/id.dart';
 import 'package:lichess_mobile/src/model/user/user.dart';
 import 'package:lichess_mobile/src/utils/l10n_context.dart';
 
 part 'player.freezed.dart';
+part 'player.g.dart';
 
-@freezed
+@Freezed(fromJson: true, toJson: true)
 class Player with _$Player {
   const Player._();
 
   const factory Player({
-    UserId? id,
+    LightUser? user,
     String? name,
-    String? title,
-    bool? patron,
     int? aiLevel,
     int? rating,
     int? ratingDiff,
@@ -37,24 +35,22 @@ class Player with _$Player {
     PlayerAnalysis? analysis,
   }) = _Player;
 
-  LightUser? get lightUser => id != null
-      ? LightUser(
-          id: id!,
-          name: name ?? id!.value,
-          title: title,
-          isPatron: patron,
-        )
-      : null;
+  factory Player.fromJson(Map<String, dynamic> json) => _$PlayerFromJson(json);
 
   bool get isAI => aiLevel != null;
 
+  /// Returns the name of the player, including title if available
+  String fullName(BuildContext context) {
+    final displayName = this.displayName(context);
+    return user?.title != null ? '${user!.title} $displayName' : displayName;
+  }
+
+  /// Returns the name of the player, without title
   String displayName(BuildContext context) =>
+      user?.name ??
       name ??
       (aiLevel != null
-          ? context.l10n.aiNameLevelAiLevel(
-              'Stockfish',
-              aiLevel.toString(),
-            )
+          ? context.l10n.aiNameLevelAiLevel('Stockfish', aiLevel.toString())
           : context.l10n.anonymous);
 
   Player setOnGame(bool onGame) {
@@ -68,13 +64,15 @@ class Player with _$Player {
   }
 }
 
-@freezed
+@Freezed(fromJson: true, toJson: true)
 class PlayerAnalysis with _$PlayerAnalysis {
   const factory PlayerAnalysis({
-    required int inaccuracy,
-    required int mistake,
-    required int blunder,
+    required int inaccuracies,
+    required int mistakes,
+    required int blunders,
     int? acpl,
     int? accuracy,
   }) = _PlayerAnalysis;
+
+  factory PlayerAnalysis.fromJson(Map<String, dynamic> json) => _$PlayerAnalysisFromJson(json);
 }

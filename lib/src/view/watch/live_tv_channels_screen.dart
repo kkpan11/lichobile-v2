@@ -1,106 +1,36 @@
 import 'package:flutter/material.dart';
-import 'package:flutter/cupertino.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
-import 'package:lichess_mobile/src/navigation.dart';
 import 'package:lichess_mobile/src/constants.dart';
-import 'package:lichess_mobile/src/styles/lichess_colors.dart';
-import 'package:lichess_mobile/src/styles/styles.dart';
-import 'package:lichess_mobile/src/utils/navigation.dart';
-import 'package:lichess_mobile/src/utils/chessground_compat.dart';
 import 'package:lichess_mobile/src/model/tv/live_tv_channels.dart';
 import 'package:lichess_mobile/src/model/tv/tv_channel.dart';
-import 'package:lichess_mobile/src/widgets/platform.dart';
-import 'package:lichess_mobile/src/widgets/board_preview.dart';
-import 'package:lichess_mobile/src/widgets/player.dart';
+import 'package:lichess_mobile/src/styles/styles.dart';
+import 'package:lichess_mobile/src/utils/focus_detector.dart';
+import 'package:lichess_mobile/src/utils/navigation.dart';
 import 'package:lichess_mobile/src/view/watch/tv_screen.dart';
+import 'package:lichess_mobile/src/widgets/board_preview.dart';
+import 'package:lichess_mobile/src/widgets/platform_scaffold.dart';
+import 'package:lichess_mobile/src/widgets/user_full_name.dart';
 
-class LiveTvChannelsScreen extends ConsumerStatefulWidget {
+class LiveTvChannelsScreen extends ConsumerWidget {
   const LiveTvChannelsScreen({super.key});
 
-  @override
-  ConsumerState<LiveTvChannelsScreen> createState() => _TvChannelsScreenState();
-}
+  static Route<dynamic> buildRoute(BuildContext context) {
+    return buildScreenRoute(context, title: 'Lichess TV', screen: const LiveTvChannelsScreen());
+  }
 
-class _TvChannelsScreenState extends ConsumerState<LiveTvChannelsScreen>
-    with RouteAware, WidgetsBindingObserver {
   @override
-  Widget build(BuildContext context) {
-    return PlatformWidget(
-      androidBuilder: _androidBuilder,
-      iosBuilder: _iosBuilder,
+  Widget build(BuildContext context, WidgetRef ref) {
+    return FocusDetector(
+      onFocusRegained: () {
+        ref.read(liveTvChannelsProvider.notifier).startWatching();
+      },
+      onFocusLost: () {
+        if (context.mounted) {
+          ref.read(liveTvChannelsProvider.notifier).stopWatching();
+        }
+      },
+      child: const PlatformScaffold(appBarTitle: Text('Lichess TV'), body: _Body()),
     );
-  }
-
-  Widget _androidBuilder(
-    BuildContext context,
-  ) {
-    return Scaffold(
-      appBar: AppBar(
-        title: const Text('Lichess TV'),
-      ),
-      body: const _Body(),
-    );
-  }
-
-  Widget _iosBuilder(
-    BuildContext context,
-  ) {
-    return const CupertinoPageScaffold(
-      navigationBar: CupertinoNavigationBar(
-        middle: Text('Lichess TV'),
-      ),
-      child: _Body(),
-    );
-  }
-
-  @override
-  void initState() {
-    WidgetsBinding.instance.addObserver(this);
-    super.initState();
-  }
-
-  @override
-  void didChangeAppLifecycleState(AppLifecycleState state) {
-    if (state == AppLifecycleState.resumed) {
-      ref.read(liveTvChannelsProvider.notifier).startWatching();
-    } else {
-      ref.read(liveTvChannelsProvider.notifier).stopWatching();
-    }
-  }
-
-  @override
-  void didChangeDependencies() {
-    super.didChangeDependencies();
-    final route = ModalRoute.of(context);
-    if (route != null && route is PageRoute) {
-      tvRouteObserver.subscribe(this, route);
-    }
-  }
-
-  @override
-  void dispose() {
-    WidgetsBinding.instance.removeObserver(this);
-    tvRouteObserver.unsubscribe(this);
-    super.dispose();
-  }
-
-  @override
-  void didPushNext() {
-    ref.read(liveTvChannelsProvider.notifier).stopWatching();
-    super.didPushNext();
-  }
-
-  @override
-  void didPopNext() {
-    ref.read(liveTvChannelsProvider.notifier).startWatching();
-    super.didPopNext();
-  }
-
-  @override
-  void didPop() {
-    ref.read(liveTvChannelsProvider.notifier).stopWatching();
-    super.didPop();
   }
 }
 
@@ -122,35 +52,28 @@ class _Body extends ConsumerWidget {
             final game = list[index];
             return SmallBoardPreview(
               onTap: () {
-                pushPlatformRoute(
-                  context,
-                  rootNavigator: true,
-                  builder: (_) => TvScreen(
-                    channel: game.channel,
-                    initialGame: (game.id, game.orientation),
+                Navigator.of(context, rootNavigator: true).push(
+                  TvScreen.buildRoute(
+                    context,
+                    game.channel,
+                    gameId: game.id,
+                    orientation: game.orientation,
                   ),
                 );
               },
-              orientation: game.orientation.cg,
+              orientation: game.orientation,
               fen: game.fen ?? kEmptyFen,
-              lastMove: game.lastMove?.cg,
+              lastMove: game.lastMove,
               description: Column(
                 crossAxisAlignment: CrossAxisAlignment.start,
                 mainAxisSize: MainAxisSize.max,
                 mainAxisAlignment: MainAxisAlignment.spaceAround,
                 children: [
-                  Text(
-                    game.channel.label,
-                    style: Styles.boardPreviewTitle,
-                  ),
-                  Icon(
-                    game.channel.icon,
-                    color: LichessColors.brag,
-                    size: 30,
-                  ),
-                  PlayerTitle(
-                    userName: game.player.asPlayer.displayName(context),
-                    title: game.player.title,
+                  Text(game.channel.label, style: Styles.boardPreviewTitle),
+                  Icon(game.channel.icon, color: ColorScheme.of(context).primary, size: 30),
+                  UserFullNameWidget.player(
+                    user: game.player.asPlayer.user,
+                    aiLevel: game.player.asPlayer.aiLevel,
                     rating: game.player.rating,
                   ),
                 ],
@@ -159,12 +82,8 @@ class _Body extends ConsumerWidget {
           },
         );
       },
-      loading: () => const Center(
-        child: CircularProgressIndicator(),
-      ),
-      error: (error, stackTrace) => Center(
-        child: Text(error.toString()),
-      ),
+      loading: () => const Center(child: CircularProgressIndicator()),
+      error: (error, stackTrace) => Center(child: Text(error.toString())),
     );
   }
 }

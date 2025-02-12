@@ -1,30 +1,64 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
+import 'package:lichess_mobile/src/widgets/background.dart';
 
-/// Push a new route using Navigator
+/// A page route that always builds the same screen widget.
 ///
-/// Will use [MaterialPageRoute] on Android and [CupertinoPageRoute] on iOS.
-Future<void> pushPlatformRoute(
+/// This is useful to inspect new screens being pushed to the Navigator in tests.
+abstract class ScreenRoute<T extends Object?> extends PageRoute<T> {
+  /// The widget that this page route always builds.
+  Widget get screen;
+}
+
+/// A [MaterialPageRoute] that always builds the same screen widget.
+///
+/// This route wraps the [screen] with a [FullScreenBackground] to ensure that the background
+/// is always filled with the configured app's background color or image.
+class MaterialScreenRoute<T extends Object?> extends MaterialPageRoute<T>
+    implements ScreenRoute<T> {
+  MaterialScreenRoute({
+    required this.screen,
+    super.settings,
+    super.maintainState,
+    super.fullscreenDialog,
+    super.allowSnapshotting,
+  }) : super(builder: (_) => FullScreenBackground(child: screen));
+
+  @override
+  final Widget screen;
+}
+
+/// A [CupertinoPageRoute] that always builds the same screen widget.
+///
+/// This route wraps the [screen] with a [FullScreenBackground] to ensure that the background
+/// is always filled with the configured app's background color or image.
+class CupertinoScreenRoute<T extends Object?> extends CupertinoPageRoute<T>
+    implements ScreenRoute<T> {
+  CupertinoScreenRoute({
+    required this.screen,
+    super.settings,
+    super.maintainState,
+    super.fullscreenDialog,
+    super.title,
+  }) : super(builder: (_) => FullScreenBackground(child: screen));
+
+  @override
+  final Widget screen;
+}
+
+/// Builds a new route for the [screen] based on the platform.
+///
+/// This route wraps the [screen] with a [FullScreenBackground] to ensure that the background
+/// is always filled with the configured app's background color or image.
+///
+/// It will return a [MaterialScreenRoute] on Android and a [CupertinoScreenRoute] on iOS.
+Route<T> buildScreenRoute<T>(
   BuildContext context, {
-  required WidgetBuilder builder,
-  bool rootNavigator = false,
+  required Widget screen,
   bool fullscreenDialog = false,
   String? title,
 }) {
-  return Navigator.of(
-    context,
-    rootNavigator: rootNavigator,
-  ).push<void>(
-    defaultTargetPlatform == TargetPlatform.iOS
-        ? CupertinoPageRoute(
-            builder: builder,
-            title: title,
-            fullscreenDialog: fullscreenDialog,
-          )
-        : MaterialPageRoute(
-            builder: builder,
-            fullscreenDialog: fullscreenDialog,
-          ),
-  );
+  return Theme.of(context).platform == TargetPlatform.iOS
+      ? CupertinoScreenRoute<T>(screen: screen, title: title, fullscreenDialog: fullscreenDialog)
+      : MaterialScreenRoute<T>(screen: screen, fullscreenDialog: fullscreenDialog);
 }

@@ -1,306 +1,185 @@
-import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
-import 'package:cached_network_image/cached_network_image.dart';
-import 'package:flutter_gen/gen_l10n/l10n.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:intl/intl.dart';
-import 'package:timeago/timeago.dart' as timeago;
-
-import 'package:lichess_mobile/src/styles/lichess_colors.dart';
-import 'package:lichess_mobile/src/styles/lichess_icons.dart';
-import 'package:lichess_mobile/src/model/common/perf.dart';
-import 'package:lichess_mobile/src/styles/styles.dart';
-import 'package:lichess_mobile/src/constants.dart';
-import 'package:lichess_mobile/src/model/user/user_repository_providers.dart';
+import 'package:http/http.dart' show ClientException;
+import 'package:lichess_mobile/src/model/auth/auth_session.dart';
+import 'package:lichess_mobile/src/model/game/game_history.dart';
+import 'package:lichess_mobile/src/model/relation/relation_repository.dart';
 import 'package:lichess_mobile/src/model/user/user.dart';
-import 'package:lichess_mobile/src/view/user/perf_stats_screen.dart';
-import 'package:lichess_mobile/src/utils/duration.dart';
+import 'package:lichess_mobile/src/model/user/user_repository_providers.dart';
+import 'package:lichess_mobile/src/network/http.dart';
+import 'package:lichess_mobile/src/styles/lichess_icons.dart';
+import 'package:lichess_mobile/src/styles/styles.dart';
 import 'package:lichess_mobile/src/utils/l10n_context.dart';
 import 'package:lichess_mobile/src/utils/navigation.dart';
-import 'package:lichess_mobile/src/widgets/buttons.dart';
-import 'package:lichess_mobile/src/widgets/feedback.dart';
-import 'package:lichess_mobile/src/widgets/platform.dart';
-import 'package:lichess_mobile/src/widgets/player.dart';
-import 'package:lichess_mobile/src/view/account/rating_pref_aware.dart';
+import 'package:lichess_mobile/src/view/play/challenge_odd_bots_screen.dart';
+import 'package:lichess_mobile/src/view/play/create_challenge_screen.dart';
+import 'package:lichess_mobile/src/view/user/perf_cards.dart';
 import 'package:lichess_mobile/src/view/user/recent_games.dart';
+import 'package:lichess_mobile/src/view/user/user_activity.dart';
+import 'package:lichess_mobile/src/view/user/user_profile.dart';
+import 'package:lichess_mobile/src/widgets/feedback.dart';
+import 'package:lichess_mobile/src/widgets/list.dart';
+import 'package:lichess_mobile/src/widgets/platform_scaffold.dart';
+import 'package:lichess_mobile/src/widgets/user_full_name.dart';
+import 'package:url_launcher/url_launcher.dart';
 
-import 'user_activity.dart';
-import 'countries.dart';
-
-class UserScreen extends ConsumerWidget {
+class UserScreen extends ConsumerStatefulWidget {
   const UserScreen({required this.user, super.key});
 
   final LightUser user;
 
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    return ConsumerPlatformWidget(
-      ref: ref,
-      androidBuilder: _buildAndroid,
-      iosBuilder: _buildIos,
-    );
+  static Route<dynamic> buildRoute(BuildContext context, LightUser user) {
+    return buildScreenRoute(context, title: user.name, screen: UserScreen(user: user));
   }
 
-  Widget _buildAndroid(BuildContext context, WidgetRef ref) {
-    final asyncUser = ref.watch(userProvider(id: user.id));
-    return Scaffold(
-      appBar: AppBar(
-        title: PlayerTitle(
-          userName: user.name,
-          title: user.title,
-          isPatron: user.isPatron,
-        ),
+  @override
+  ConsumerState<UserScreen> createState() => _UserScreenState();
+}
+
+class _UserScreenState extends ConsumerState<UserScreen> {
+  bool isLoading = false;
+
+  void setIsLoading(bool value) {
+    setState(() {
+      isLoading = value;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final asyncUser = ref.watch(userAndStatusProvider(id: widget.user.id));
+    final updatedLightUser = asyncUser.maybeWhen(
+      data: (data) => data.$1.lightUser.copyWith(isOnline: data.$2.online),
+      orElse: () => null,
+    );
+    return PlatformScaffold(
+      appBarTitle: UserFullNameWidget(
+        user: updatedLightUser ?? widget.user,
+        shouldShowOnline: updatedLightUser != null,
       ),
+      appBarActions: [if (isLoading) const PlatformAppBarLoadingIndicator()],
       body: asyncUser.when(
-        data: (user) {
-          return ListView(children: buildUserScreenList(user));
-        },
+        data: (data) => _UserProfileListView(data.$1, isLoading, setIsLoading),
         loading: () => const Center(child: CircularProgressIndicator()),
         error: (error, _) {
-          return FullScreenRetryRequest(
-            onRetry: () => ref.invalidate(userProvider(id: user.id)),
-          );
-        },
-      ),
-    );
-  }
-
-  Widget _buildIos(BuildContext context, WidgetRef ref) {
-    final asyncUser = ref.watch(userProvider(id: user.id));
-    return CupertinoPageScaffold(
-      navigationBar: CupertinoNavigationBar(
-        middle: PlayerTitle(
-          userName: user.name,
-          title: user.title,
-          isPatron: user.isPatron,
-        ),
-      ),
-      child: asyncUser.when(
-        data: (user) => SafeArea(
-          child: ListView(children: buildUserScreenList(user)),
-        ),
-        loading: () =>
-            const Center(child: CircularProgressIndicator.adaptive()),
-        error: (error, _) {
-          return FullScreenRetryRequest(
-            onRetry: () => ref.invalidate(userProvider(id: user.id)),
-          );
-        },
-      ),
-    );
-  }
-}
-
-// ignore: avoid-returning-widgets
-/// Common content for [UserScreen] and [ProfileScreen].
-List<Widget> buildUserScreenList(User user) {
-  return [
-    _Profile(user: user),
-    PerfCards(user: user),
-    UserActivityWidget(user: user),
-    RecentGames(user: user.lightUser),
-  ];
-}
-
-const _userNameStyle = TextStyle(fontSize: 20, fontWeight: FontWeight.w500);
-
-class _Profile extends StatelessWidget {
-  const _Profile({
-    required this.user,
-  });
-
-  final User user;
-
-  @override
-  Widget build(BuildContext context) {
-    final userFullName = user.profile?.fullName != null
-        ? Text(
-            user.profile!.fullName!,
-            style: _userNameStyle,
-          )
-        : null;
-
-    return Padding(
-      padding: Styles.bodySectionPadding,
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: [
-          if (userFullName != null)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 5),
-              child: userFullName,
-            ),
-          if (user.profile?.bio != null)
-            Text(
-              user.profile!.bio!,
-              style: const TextStyle(fontStyle: FontStyle.italic),
-            ),
-          const SizedBox(height: 10),
-          if (user.profile != null)
-            Padding(
-              padding: const EdgeInsets.only(bottom: 5),
-              child: Location(profile: user.profile!),
-            ),
-          Text(
-            '${context.l10n.memberSince} ${DateFormat.yMMMMd().format(user.createdAt)}',
-          ),
-          const SizedBox(height: 5),
-          Text(context.l10n.lastSeenActive(timeago.format(user.seenAt))),
-          const SizedBox(height: 5),
-          if (user.playTime != null)
-            Text(
-              context.l10n.tpTimeSpentPlaying(
-                user.playTime!.total
-                    .toDaysHoursMinutes(AppLocalizations.of(context)),
+          if (error is ClientException && error.message.contains('404')) {
+            return Center(
+              child: Text(
+                textAlign: TextAlign.center,
+                context.l10n.usernameNotFound(widget.user.name),
+                style: Styles.bold,
               ),
-            )
-          else
-            kEmptyWidget,
-        ],
+            );
+          }
+          return FullScreenRetryRequest(
+            onRetry: () => ref.invalidate(userProvider(id: widget.user.id)),
+          );
+        },
       ),
     );
   }
 }
 
-class PerfCards extends StatelessWidget {
-  const PerfCards({required this.user, super.key});
-
+class _UserProfileListView extends ConsumerWidget {
+  const _UserProfileListView(this.user, this.isLoading, this.setIsLoading);
   final User user;
+  final bool isLoading;
+
+  final void Function(bool value) setIsLoading;
 
   @override
-  Widget build(BuildContext context) {
-    List<Perf> userPerfs = Perf.values.where((element) {
-      final p = user.perfs[element];
-      return p != null &&
-          p.numberOfGames > 0 &&
-          p.ratingDeviation < kClueLessDeviation;
-    }).toList(growable: false);
+  Widget build(BuildContext context, WidgetRef ref) {
+    final recentGames = ref.watch(userRecentGamesProvider(userId: user.id));
+    final nbOfGames = ref.watch(userNumberOfGamesProvider(user.lightUser)).valueOrNull ?? 0;
+    final session = ref.watch(authSessionProvider);
 
-    userPerfs.sort(
-      (p1, p2) => user.perfs[p1]!.numberOfGames
-          .compareTo(user.perfs[p2]!.numberOfGames),
-    );
-    userPerfs = userPerfs.reversed.toList();
-
-    if (userPerfs.isEmpty) {
-      return const SizedBox.shrink();
+    if (user.disabled == true) {
+      return Center(child: Text(context.l10n.settingsThisAccountIsClosed, style: Styles.bold));
     }
 
-    return RatingPrefAware(
-      child: Padding(
-        padding: Styles.bodySectionPadding,
-        child: SizedBox(
-          height: 106,
-          child: ListView.separated(
-            padding: const EdgeInsets.symmetric(vertical: 3.0),
-            scrollDirection: Axis.horizontal,
-            itemCount: userPerfs.length,
-            itemBuilder: (context, index) {
-              final perf = userPerfs[index];
-              final userPerf = user.perfs[perf]!;
-              final bool isPerfWithoutStats =
-                  [Perf.puzzle, Perf.storm].contains(perf);
-              return SizedBox(
-                height: 100,
-                width: 100,
-                child: PlatformCard(
-                  child: AdaptiveInkWell(
-                    borderRadius: BorderRadius.circular(10),
-                    onTap: isPerfWithoutStats
-                        ? null
-                        : () => _handlePerfCardTap(context, perf),
-                    child: Padding(
-                      padding: const EdgeInsets.all(6.0),
-                      child: Column(
-                        mainAxisAlignment: MainAxisAlignment.spaceAround,
-                        children: [
-                          Text(
-                            perf.shortTitle,
-                            style: TextStyle(color: textShade(context, 0.7)),
-                          ),
-                          Icon(perf.icon, color: textShade(context, 0.6)),
-                          Row(
-                            mainAxisAlignment: MainAxisAlignment.center,
-                            crossAxisAlignment: CrossAxisAlignment.baseline,
-                            textBaseline: TextBaseline.alphabetic,
-                            children: [
-                              PlayerRating(
-                                rating: userPerf.rating,
-                                deviation: userPerf.ratingDeviation,
-                                provisional: userPerf.provisional,
-                                style: Styles.bold,
-                              ),
-                              const SizedBox(width: 3),
-                              if (userPerf.progression != 0) ...[
-                                Icon(
-                                  userPerf.progression > 0
-                                      ? LichessIcons.arrow_full_upperright
-                                      : LichessIcons.arrow_full_lowerright,
-                                  color: userPerf.progression > 0
-                                      ? LichessColors.good
-                                      : LichessColors.red,
-                                  size: 12,
-                                ),
-                                Text(
-                                  userPerf.progression.abs().toString(),
-                                  style: TextStyle(
-                                    color: userPerf.progression > 0
-                                        ? LichessColors.good
-                                        : LichessColors.red,
-                                    fontSize: 11,
-                                  ),
-                                ),
-                              ],
-                            ],
-                          ),
-                        ],
-                      ),
-                    ),
-                  ),
-                ),
-              );
-            },
-            separatorBuilder: (context, index) => const SizedBox(width: 10),
-          ),
-        ),
-      ),
-    );
-  }
+    Future<void> userAction(Future<void> Function(LichessClient client) action) async {
+      setIsLoading(true);
+      try {
+        await ref
+            .withClient(action)
+            .then((_) => ref.invalidate(userAndStatusProvider(id: user.id)));
+      } finally {
+        setIsLoading(false);
+      }
+    }
 
-  void _handlePerfCardTap(BuildContext context, Perf perf) {
-    pushPlatformRoute(
-      context,
-      builder: (context) => PerfStatsScreen(
-        user: user,
-        perf: perf,
-      ),
-    );
-  }
-}
-
-class Location extends StatelessWidget {
-  const Location({required this.profile, super.key});
-
-  final Profile profile;
-
-  @override
-  Widget build(BuildContext context) {
-    return Row(
+    return ListView(
       children: [
-        if (profile.country != null)
-          CachedNetworkImage(
-            imageUrl: lichessFlagSrc(profile.country!),
-            errorWidget: (_, __, ___) => kEmptyWidget,
-          )
-        else
-          kEmptyWidget,
-        const SizedBox(width: 10),
-        Text(profile.location ?? countries[profile.country] ?? ''),
+        UserProfileWidget(user: user),
+        PerfCards(user: user, isMe: false),
+        if (session != null)
+          ListSection(
+            hasLeading: true,
+            children: [
+              if (user.canChallenge == true)
+                PlatformListTile(
+                  title: Text(context.l10n.challengeChallengeToPlay),
+                  leading: const Icon(LichessIcons.crossed_swords),
+                  onTap: () {
+                    final isOddBot = oddBots.contains(user.lightUser.name.toLowerCase());
+                    Navigator.of(context).push(
+                      isOddBot
+                          ? ChallengeOddBotsScreen.buildRoute(context, user.lightUser)
+                          : CreateChallengeScreen.buildRoute(context, user.lightUser),
+                    );
+                  },
+                ),
+              if (user.followable == true && user.following != true)
+                PlatformListTile(
+                  leading: const Icon(Icons.person_add),
+                  title: Text(context.l10n.follow),
+                  onTap:
+                      isLoading
+                          ? null
+                          : () =>
+                              userAction((client) => RelationRepository(client).follow(user.id)),
+                )
+              else if (user.following == true)
+                PlatformListTile(
+                  leading: const Icon(Icons.person_remove),
+                  title: Text(context.l10n.unfollow),
+                  onTap:
+                      isLoading
+                          ? null
+                          : () =>
+                              userAction((client) => RelationRepository(client).unfollow(user.id)),
+                ),
+              if (user.following != true && user.blocking != true)
+                PlatformListTile(
+                  leading: const Icon(Icons.block),
+                  title: Text(context.l10n.block),
+                  onTap:
+                      isLoading
+                          ? null
+                          : () => userAction((client) => RelationRepository(client).block(user.id)),
+                )
+              else if (user.blocking == true)
+                PlatformListTile(
+                  leading: const Icon(Icons.block),
+                  title: Text(context.l10n.unblock),
+                  onTap:
+                      isLoading
+                          ? null
+                          : () =>
+                              userAction((client) => RelationRepository(client).unblock(user.id)),
+                ),
+              PlatformListTile(
+                leading: const Icon(Icons.report_problem),
+                title: Text(context.l10n.reportXToModerators(user.username)),
+                onTap: () {
+                  launchUrl(lichessUri('/report', {'username': user.id, 'login': session.user.id}));
+                },
+              ),
+            ],
+          ),
+        UserActivityWidget(user: user),
+        RecentGamesWidget(recentGames: recentGames, nbOfGames: nbOfGames, user: user.lightUser),
       ],
     );
   }
-}
-
-String lichessFlagSrc(String country) {
-  return '$kLichessHost/assets/images/flags/$country.png';
 }

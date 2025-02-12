@@ -1,8 +1,7 @@
-import 'package:flutter_gen/gen_l10n/l10n.dart';
 import 'package:flutter_test/flutter_test.dart';
-import 'package:mocktail/mocktail.dart';
-
+import 'package:lichess_mobile/l10n/l10n.dart';
 import 'package:lichess_mobile/src/utils/duration.dart';
+import 'package:mocktail/mocktail.dart';
 
 class MockAppLocalizations extends Mock implements AppLocalizations {}
 
@@ -25,23 +24,11 @@ void main() {
 
   group('DurationExtensions.toDaysHoursMinutes()', () {
     test('all values nonzero, plural', () {
-      testTimeStr(
-        mockAppLocalizations,
-        2,
-        2,
-        2,
-        '2 days, 2 hours and 2 minutes',
-      );
+      testTimeStr(mockAppLocalizations, 2, 2, 2, '2 days, 2 hours and 2 minutes');
     });
 
     test('all values nonzero, plural', () {
-      testTimeStr(
-        mockAppLocalizations,
-        2,
-        2,
-        2,
-        '2 days, 2 hours and 2 minutes',
-      );
+      testTimeStr(mockAppLocalizations, 2, 2, 2, '2 days, 2 hours and 2 minutes');
     });
 
     test('all values nonzero, single', () {
@@ -85,7 +72,10 @@ void testTimeStr(
   int minutes,
   String expected,
 ) {
-  final timeStr = Duration(days: days, hours: hours, minutes: minutes)
-      .toDaysHoursMinutes(mockAppLocalizations);
+  final timeStr = Duration(
+    days: days,
+    hours: hours,
+    minutes: minutes,
+  ).toDaysHoursMinutes(mockAppLocalizations);
   expect(timeStr, expected);
 }

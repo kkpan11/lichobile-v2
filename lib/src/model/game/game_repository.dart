@@ -1,199 +1,139 @@
-import 'package:result_extensions/result_extensions.dart';
-import 'package:logging/logging.dart';
 import 'package:dartchess/dartchess.dart';
-import 'package:deep_pick/deep_pick.dart';
 import 'package:fast_immutable_collections/fast_immutable_collections.dart';
-
+import 'package:http/http.dart' as http;
+import 'package:lichess_mobile/src/model/auth/auth_session.dart';
 import 'package:lichess_mobile/src/model/common/id.dart';
 import 'package:lichess_mobile/src/model/common/perf.dart';
-import 'package:lichess_mobile/src/model/common/chess.dart';
-import 'package:lichess_mobile/src/model/common/speed.dart';
-import 'package:lichess_mobile/src/model/auth/auth_client.dart';
-import 'package:lichess_mobile/src/constants.dart';
-import 'package:lichess_mobile/src/utils/json.dart';
-
-import 'game.dart';
-import 'game_status.dart';
-import 'player.dart';
-import 'material_diff.dart';
+import 'package:lichess_mobile/src/model/game/archived_game.dart';
+import 'package:lichess_mobile/src/model/game/game_filter.dart';
+import 'package:lichess_mobile/src/model/game/playable_game.dart';
+import 'package:lichess_mobile/src/network/http.dart';
 
 class GameRepository {
-  const GameRepository(
-    Logger log, {
-    required this.apiClient,
-  }) : _log = log;
+  const GameRepository(this.client);
 
-  final AuthClient apiClient;
-  final Logger _log;
+  final LichessClient client;
 
-  FutureResult<ArchivedGame> getGame(GameId id) {
-    return apiClient.get(
-      Uri.parse('$kLichessHost/game/export/$id'),
+  Future<ArchivedGame> getGame(GameId id, {bool withBookmarked = false}) {
+    return client.readJson(
+      Uri(
+        path: '/game/export/$id',
+        queryParameters: {
+          'clocks': '1',
+          'accuracy': '1',
+          if (withBookmarked) 'withBookmarked': '1',
+        },
+      ),
       headers: {'Accept': 'application/json'},
-    ).flatMap((response) {
-      return readJsonObject(
-        response,
-        mapper: _makeArchivedGameFromJson,
-        logger: _log,
-      );
-    });
-  }
-
-  // TODO parameters
-  FutureResult<IList<ArchivedGameData>> getUserGames(UserId userId) {
-    return apiClient.get(
-      Uri.parse(
-        '$kLichessHost/api/games/user/$userId?max=10&moves=false&lastFen=true&accuracy=true&opening=true',
-      ),
-      headers: {'Accept': 'application/x-ndjson'},
-    ).flatMap(
-      (r) => readNdJsonList(
-        r,
-        mapper: _makeArchivedGameDataFromJson,
-        logger: _log,
-      ),
+      mapper: (json) => ArchivedGame.fromServerJson(json, withBookmarked: withBookmarked),
     );
   }
 
-  FutureResult<IList<ArchivedGameData>> getGamesByIds(ISet<GameId> ids) {
-    return apiClient
-        .post(
-          Uri.parse(
-            '$kLichessHost/api/games/export/_ids?moves=false&lastFen=true',
+  Future<void> requestServerAnalysis(GameId id) async {
+    final uri = Uri(path: '/$id/request-analysis');
+    final response = await client.post(Uri(path: '/$id/request-analysis'));
+    if (response.statusCode >= 400) {
+      throw http.ClientException('Failed to request analysis: ${response.statusCode}', uri);
+    }
+  }
+
+  Future<IList<LightArchivedGameWithPov>> getUserGames(
+    UserId userId, {
+    int max = 20,
+    DateTime? until,
+    GameFilterState filter = const GameFilterState(),
+    bool withBookmarked = false,
+  }) {
+    assert(!filter.perfs.contains(Perf.fromPosition));
+    assert(!filter.perfs.contains(Perf.puzzle));
+    assert(!filter.perfs.contains(Perf.storm));
+    assert(!filter.perfs.contains(Perf.streak));
+    return client
+        .readNdJsonList(
+          Uri(
+            path: '/api/games/user/$userId',
+            queryParameters: {
+              'max': max.toString(),
+              if (until != null) 'until': until.millisecondsSinceEpoch.toString(),
+              'moves': 'false',
+              'lastFen': 'true',
+              'accuracy': 'true',
+              'opening': 'true',
+              if (filter.perfs.isNotEmpty)
+                'perfType': filter.perfs.map((perf) => perf.name).join(','),
+              if (filter.side != null) 'color': filter.side!.name,
+              if (withBookmarked) 'withBookmarked': 'true',
+            },
           ),
           headers: {'Accept': 'application/x-ndjson'},
-          body: ids.join(','),
+          mapper: (json) => LightArchivedGame.fromServerJson(json, withBookmarked: withBookmarked),
         )
-        .flatMap(
-          (r) => readNdJsonList(
-            r,
-            mapper: _makeArchivedGameDataFromJson,
-            logger: _log,
-          ),
+        .then(
+          (value) =>
+              value
+                  .map(
+                    (e) => (
+                      game: e,
+                      // we know here user is not null for at least one of the players
+                      pov: e.white.user?.id == userId ? Side.white : Side.black,
+                    ),
+                  )
+                  .toIList(),
         );
   }
-}
 
-// --
-
-ArchivedGame _makeArchivedGameFromJson(Map<String, dynamic> json) =>
-    _archivedGameFromPick(pick(json).required());
-
-ArchivedGame _archivedGameFromPick(RequiredPick pick) {
-  final data = _archivedGameDataFromPick(pick);
-  final clocks = pick('clocks').asListOrNull<Duration>(
-    (p0) => Duration(milliseconds: p0.asIntOrThrow() * 10),
-  );
-
-  return ArchivedGame(
-    data: data,
-    steps: pick('moves').letOrThrow((it) {
-      final moves = it.asStringOrThrow().split(' ');
-      // assume lichess always send initialFen with fromPosition and chess960
-      Position position = (data.variant == Variant.fromPosition ||
-              data.variant == Variant.chess960)
-          ? Chess.fromSetup(Setup.parseFen(data.initialFen!))
-          : data.variant.initialPosition;
-      int index = 0;
-      final List<GameStep> steps = [GameStep(ply: index, position: position)];
-      Duration? clock = data.clock?.initial;
-      for (final san in moves) {
-        final stepClock = clocks?[index];
-        index++;
-        final move = position.parseSan(san);
-        // assume lichess only sends correct moves
-        position = position.playUnchecked(move!);
-        steps.add(
-          GameStep(
-            ply: index,
-            sanMove: SanMove(san, move),
-            position: position,
-            diff: MaterialDiff.fromBoard(position.board),
-            whiteClock: index.isOdd ? stepClock : clock,
-            blackClock: index.isEven ? stepClock : clock,
+  Future<IList<LightArchivedGameWithPov>> getBookmarkedGames(
+    AuthSessionState session, {
+    int max = 20,
+    DateTime? until,
+  }) {
+    return client
+        .readNdJsonList(
+          Uri(
+            path: '/api/games/export/bookmarks',
+            queryParameters: {
+              'max': max.toString(),
+              if (until != null) 'until': until.millisecondsSinceEpoch.toString(),
+              'moves': 'false',
+              'lastFen': 'true',
+              'accuracy': 'true',
+              'opening': 'true',
+            },
           ),
+          headers: {'Accept': 'application/x-ndjson'},
+          mapper: (json) => LightArchivedGame.fromServerJson(json, isBookmarked: true),
+        )
+        .then(
+          (value) =>
+              value
+                  .map(
+                    (e) => (
+                      game: e,
+                      // we know here user is not null for at least one of the players
+                      pov: e.white.user?.id == session.user.id ? Side.white : Side.black,
+                    ),
+                  )
+                  .toIList(),
         );
-        clock = stepClock;
-      }
-      return IList(steps);
-    }),
-  );
+  }
+
+  /// Returns the games of the current user, given a list of ids.
+  Future<IList<PlayableGame>> getMyGamesByIds(ISet<GameId> ids) {
+    if (ids.isEmpty) {
+      return Future.value(IList<PlayableGame>());
+    }
+    return client.readJsonList(
+      Uri(path: '/api/mobile/my-games', queryParameters: {'ids': ids.join(',')}),
+      mapper: PlayableGame.fromServerJson,
+    );
+  }
+
+  Future<IList<LightArchivedGame>> getGamesByIds(ISet<GameId> ids) {
+    return client.postReadNdJsonList(
+      Uri(path: '/api/games/export/_ids', queryParameters: {'moves': 'false', 'lastFen': 'true'}),
+      headers: {'Accept': 'application/x-ndjson'},
+      body: ids.join(','),
+      mapper: LightArchivedGame.fromServerJson,
+    );
+  }
 }
-
-ArchivedGameData _makeArchivedGameDataFromJson(Map<String, dynamic> json) =>
-    _archivedGameDataFromPick(pick(json).required());
-
-ArchivedGameData _archivedGameDataFromPick(RequiredPick pick) {
-  return ArchivedGameData(
-    id: pick('id').asGameIdOrThrow(),
-    rated: pick('rated').asBoolOrThrow(),
-    speed: pick('speed').asSpeedOrThrow(),
-    perf: pick('perf').asPerfOrThrow(),
-    createdAt: pick('createdAt').asDateTimeFromMillisecondsOrThrow(),
-    lastMoveAt: pick('lastMoveAt').asDateTimeFromMillisecondsOrThrow(),
-    status: pick('status').asGameStatusOrThrow(),
-    white: pick('players', 'white').letOrThrow(_playerFromUserGamePick),
-    black: pick('players', 'black').letOrThrow(_playerFromUserGamePick),
-    winner: pick('winner').asSideOrNull(),
-    variant: pick('variant').asVariantOrThrow(),
-    initialFen: pick('initialFen').asStringOrNull(),
-    lastFen: pick('lastFen').asStringOrNull(),
-    clock: pick('clock').letOrNull(_clockDataFromPick),
-    opening: pick('opening').letOrNull(_openingFromPick),
-  );
-}
-
-LightOpening _openingFromPick(RequiredPick pick) {
-  return LightOpening(
-    eco: pick('eco').asStringOrThrow(),
-    name: pick('name').asStringOrThrow(),
-  );
-}
-
-ClockData _clockDataFromPick(RequiredPick pick) {
-  return ClockData(
-    initial: pick('initial').asDurationFromSecondsOrThrow(),
-    increment: pick('increment').asDurationFromSecondsOrThrow(),
-  );
-}
-
-Player _playerFromUserGamePick(RequiredPick pick) {
-  return Player(
-    id: pick('user', 'id').asUserIdOrNull(),
-    name: pick('user', 'name').asStringOrNull(),
-    patron: pick('user', 'patron').asBoolOrNull(),
-    title: pick('user', 'title').asStringOrNull(),
-    rating: pick('rating').asIntOrNull(),
-    ratingDiff: pick('ratingDiff').asIntOrNull(),
-    aiLevel: pick('aiLevel').asIntOrNull(),
-    analysis: pick('analysis').letOrNull(_playerAnalysisFromPick),
-  );
-}
-
-PlayerAnalysis _playerAnalysisFromPick(RequiredPick pick) {
-  return PlayerAnalysis(
-    inaccuracy: pick('inaccuracy').asIntOrThrow(),
-    mistake: pick('mistake').asIntOrThrow(),
-    blunder: pick('blunder').asIntOrThrow(),
-    acpl: pick('acpl').asIntOrNull(),
-    accuracy: pick('accuracy').asIntOrNull(),
-  );
-}
-
-// Will be needed later
-
-// MoveAnalysis _moveAnalysisFromPick(RequiredPick pick) {
-//   return MoveAnalysis(
-//     eval: pick('eval').asIntOrNull(),
-//     best: pick('best').asStringOrNull(),
-//     variation: pick('variant').asStringOrNull(),
-//     judgment: pick('judgment').letOrNull(_analysisJudgmentFromPick),
-//   );
-// }
-
-// AnalysisJudgment _analysisJudgmentFromPick(RequiredPick pick) {
-//   return AnalysisJudgment(
-//     name: pick('name').asStringOrThrow(),
-//     comment: pick('comment').asStringOrThrow(),
-//   );
-// }

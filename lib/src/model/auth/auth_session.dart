@@ -1,23 +1,18 @@
-import 'package:riverpod_annotation/riverpod_annotation.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
-
-import 'package:lichess_mobile/src/app_dependencies.dart';
+import 'package:lichess_mobile/src/model/auth/session_storage.dart';
+import 'package:lichess_mobile/src/model/common/preloaded_data.dart';
 import 'package:lichess_mobile/src/model/user/user.dart';
+import 'package:riverpod_annotation/riverpod_annotation.dart';
 
-import 'session_storage.dart';
-
-part 'auth_session.g.dart';
 part 'auth_session.freezed.dart';
+part 'auth_session.g.dart';
 
 @Riverpod(keepAlive: true)
 class AuthSession extends _$AuthSession {
   @override
   AuthSessionState? build() {
-    // requireValue is possible because appDependenciesProvider is loaded before
-    // anything. See: lib/src/app.dart
-    return ref.watch(
-      appDependenciesProvider.select((data) => data.requireValue.userSession),
-    );
+    return ref.read(preloadedDataProvider).requireValue.userSession;
   }
 
   Future<void> update(AuthSessionState session) async {
@@ -35,11 +30,13 @@ class AuthSession extends _$AuthSession {
 
 @Freezed(fromJson: true, toJson: true)
 class AuthSessionState with _$AuthSessionState {
-  const factory AuthSessionState({
-    required LightUser user,
-    required String token,
-  }) = _AuthSessionState;
+  const factory AuthSessionState({required LightUser user, required String token}) =
+      _AuthSessionState;
 
-  factory AuthSessionState.fromJson(Map<String, dynamic> json) =>
-      _$AuthSessionStateFromJson(json);
+  factory AuthSessionState.fromJson(Map<String, dynamic> json) => _$AuthSessionStateFromJson(json);
+}
+
+@riverpod
+bool isLoggedIn(Ref ref) {
+  return ref.watch(authSessionProvider.select((authSession) => authSession != null));
 }

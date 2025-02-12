@@ -1,15 +1,14 @@
 import 'package:dartchess/dartchess.dart';
-import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:fast_immutable_collections/fast_immutable_collections.dart';
-
+import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:lichess_mobile/src/model/common/chess.dart';
-import 'package:lichess_mobile/src/model/common/uci.dart';
 import 'package:lichess_mobile/src/model/common/eval.dart';
 import 'package:lichess_mobile/src/model/common/node.dart';
+import 'package:lichess_mobile/src/model/common/uci.dart';
 
 part 'work.freezed.dart';
 
-typedef EvalResult = (Work, ClientEval);
+typedef EvalResult = (Work, LocalEval);
 
 /// A work item for the engine.
 @freezed
@@ -21,7 +20,7 @@ class Work with _$Work {
     required int threads,
     int? hashSize,
     required UciPath path,
-    required int maxDepth,
+    required Duration searchTime,
     required int multiPv,
     bool? threatMode,
     required Position initialPosition,
@@ -31,30 +30,21 @@ class Work with _$Work {
   Position get position => steps.lastOrNull?.position ?? initialPosition;
 
   /// The work ply.
-  int get ply => steps.lastOrNull?.ply ?? 0;
+  int get ply => steps.lastOrNull?.position.ply ?? initialPosition.ply;
 
   /// Cached eval for the work position.
-  ClientEval? get evalCache => steps.lastOrNull?.eval;
+  LocalEval? get evalCache => steps.lastOrNull?.eval;
 }
 
 @freezed
 class Step with _$Step {
   const Step._();
 
-  const factory Step({
-    required int ply,
-    required Position position,
-    required SanMove sanMove,
-    ClientEval? eval,
-  }) = _Step;
+  const factory Step({required Position position, required SanMove sanMove, LocalEval? eval}) =
+      _Step;
 
-  factory Step.fromNode(ViewBranch node) {
-    return Step(
-      ply: node.ply,
-      position: node.position,
-      sanMove: node.sanMove,
-      eval: node.eval,
-    );
+  factory Step.fromNode(Branch node) {
+    return Step(position: node.position, sanMove: node.sanMove, eval: node.eval);
   }
 
   /// Stockfish in chess960 mode always needs a "king takes rook" UCI notation.
@@ -72,9 +62,4 @@ class Step with _$Step {
   }
 }
 
-const _castleMoves = {
-  'e1c1': 'e1a1',
-  'e1g1': 'e1h1',
-  'e8c8': 'e8a8',
-  'e8g8': 'e8h8',
-};
+const _castleMoves = {'e1c1': 'e1a1', 'e1g1': 'e1h1', 'e8c8': 'e8a8', 'e8g8': 'e8h8'};

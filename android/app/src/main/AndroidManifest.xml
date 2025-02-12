@@ -13,7 +13,22 @@
     <application
         android:label="Lichess"
         android:name="${applicationName}"
-        android:icon="@mipmap/ic_launcher">
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
+        android:resizeableActivity="false"
+        android:enableOnBackInvokedCallback="true"
+        android:fullBackupContent="@xml/backup_rules">
+
+    <meta-data
+      android:name="com.google.firebase.messaging.default_notification_icon"
+      android:resource="@drawable/ic_stat_lichess_notification" />
+    <meta-data
+        android:name="firebase_messaging_auto_init_enabled"
+        android:value="false" />
+    <meta-data
+        android:name="firebase_analytics_collection_enabled"
+        android:value="false" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"
@@ -35,11 +50,32 @@
                 <action android:name="android.intent.action.MAIN"/>
                 <category android:name="android.intent.category.LAUNCHER"/>
             </intent-filter>
+
+            <intent-filter android:autoVerify="true">
+                <action android:name="android.intent.action.VIEW" />
+                <category android:name="android.intent.category.DEFAULT" />
+                <category android:name="android.intent.category.BROWSABLE" />
+
+                <data android:scheme="https" android:host="lichess.org" />
+
+                <data android:pathPattern="/training/....." />
+                <data android:pathPattern="/study/........" />
+
+                <data android:path="/storm" />
+                <data android:path="/streak" />
+
+                <!-- Either game or challenge -->
+                <data android:pathPattern="/........" />
+                <data android:pathPattern="/......../black" />
+                <data android:pathPattern="/......../white" />
+            </intent-filter>
         </activity>
         <!-- Don't delete the meta-data below.
              This is used by the Flutter tool to generate GeneratedPluginRegistrant.java -->
         <meta-data
             android:name="flutterEmbedding"
             android:value="2"/>
+        <receiver android:exported="false"
+            android:name="com.dexterous.flutterlocalnotifications.ActionBroadcastReceiver"/>
     </application>
 </manifest>

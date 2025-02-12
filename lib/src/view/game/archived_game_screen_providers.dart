@@ -1,9 +1,9 @@
-import 'package:riverpod_annotation/riverpod_annotation.dart';
-
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:lichess_mobile/src/model/common/id.dart';
-import 'package:lichess_mobile/src/model/game/game.dart';
-import 'package:lichess_mobile/src/model/game/game_repository_providers.dart';
 import 'package:lichess_mobile/src/model/common/service/sound_service.dart';
+import 'package:lichess_mobile/src/model/game/archived_game.dart';
+import 'package:lichess_mobile/src/model/game/game_repository_providers.dart';
+import 'package:riverpod_annotation/riverpod_annotation.dart';
 
 part 'archived_game_screen_providers.g.dart';
 
@@ -20,7 +20,7 @@ class IsBoardTurned extends _$IsBoardTurned {
 }
 
 @riverpod
-bool canGoForward(CanGoForwardRef ref, GameId id) {
+bool canGoForward(Ref ref, GameId id) {
   final gameCursor = ref.watch(gameCursorProvider(id));
   if (gameCursor.hasValue) {
     final (game, cursor) = gameCursor.value!;
@@ -31,7 +31,7 @@ bool canGoForward(CanGoForwardRef ref, GameId id) {
 }
 
 @riverpod
-bool canGoBackward(CanGoBackwardRef ref, GameId id) {
+bool canGoBackward(Ref ref, GameId id) {
   final gameCursor = ref.watch(gameCursorProvider(id));
   if (gameCursor.hasValue) {
     final (_, cursor) = gameCursor.value!;
@@ -50,6 +50,7 @@ class GameCursor extends _$GameCursor {
   }
 
   void cursorAt(int newPosition) {
+    assert(newPosition >= 0);
     if (state.hasValue) {
       final (game, _) = state.value!;
       state = AsyncValue.data((game, newPosition));

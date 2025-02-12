@@ -1,150 +1,171 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter_displaymode/flutter_displaymode.dart';
-import 'package:flutter_gen/gen_l10n/l10n.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_native_splash/flutter_native_splash.dart';
-
-import 'package:lichess_mobile/src/app_dependencies.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
+import 'package:lichess_mobile/l10n/l10n.dart';
+import 'package:lichess_mobile/src/app_links.dart';
 import 'package:lichess_mobile/src/constants.dart';
-import 'package:lichess_mobile/src/navigation.dart';
-import 'package:lichess_mobile/src/model/settings/brightness.dart';
-import 'package:lichess_mobile/src/model/settings/general_preferences.dart';
+import 'package:lichess_mobile/src/model/account/account_repository.dart';
+import 'package:lichess_mobile/src/model/challenge/challenge_service.dart';
+import 'package:lichess_mobile/src/model/common/preloaded_data.dart';
+import 'package:lichess_mobile/src/model/correspondence/correspondence_service.dart';
+import 'package:lichess_mobile/src/model/notifications/notification_service.dart';
 import 'package:lichess_mobile/src/model/settings/board_preferences.dart';
-import 'package:lichess_mobile/src/utils/immersive_mode.dart';
-import 'package:lichess_mobile/src/utils/wakelock.dart';
-import 'package:lichess_mobile/src/utils/layout.dart';
+import 'package:lichess_mobile/src/model/settings/general_preferences.dart';
+import 'package:lichess_mobile/src/navigation.dart';
+import 'package:lichess_mobile/src/network/connectivity.dart';
+import 'package:lichess_mobile/src/network/http.dart';
+import 'package:lichess_mobile/src/network/socket.dart';
+import 'package:lichess_mobile/src/theme.dart';
+import 'package:lichess_mobile/src/utils/navigation.dart';
+import 'package:lichess_mobile/src/utils/screen.dart';
 
-class App extends ConsumerStatefulWidget {
-  const App({super.key});
+/// Application initialization and main entry point.
+class AppInitializationScreen extends ConsumerWidget {
+  const AppInitializationScreen({super.key});
 
   @override
-  ConsumerState<App> createState() => _AppState();
+  Widget build(BuildContext context, WidgetRef ref) {
+    ref.listen<AsyncValue<PreloadedData>>(preloadedDataProvider, (_, state) {
+      if (state.hasValue || state.hasError) {
+        FlutterNativeSplash.remove();
+      }
+    });
+
+    return ref
+        .watch(preloadedDataProvider)
+        .when(
+          data: (_) => const Application(),
+          // loading screen is handled by the native splash screen
+          loading: () => const SizedBox.shrink(),
+          error: (err, st) {
+            debugPrint('SEVERE: [App] could not initialize app; $err\n$st');
+            return const SizedBox.shrink();
+          },
+        );
+  }
 }
 
-class _AppState extends ConsumerState<App> {
+/// The main application widget.
+///
+/// This widget is the root of the application and is responsible for setting up
+/// the theme, locale, and other global settings.
+class Application extends ConsumerStatefulWidget {
+  const Application({super.key});
+
+  @override
+  ConsumerState<Application> createState() => _AppState();
+}
+
+class _AppState extends ConsumerState<Application> {
+  /// Whether the app has checked for online status for the first time.
+  bool _firstTimeOnlineCheck = false;
+
+  AppLifecycleListener? _appLifecycleListener;
+
   @override
   void initState() {
-    if (defaultTargetPlatform == TargetPlatform.android) {
-      setOptimalDisplayMode();
-    }
+    _appLifecycleListener = AppLifecycleListener(
+      onResume: () async {
+        final online = await isOnline(ref.read(defaultClientProvider));
+        if (online) {
+          ref.invalidate(ongoingGamesProvider);
+        }
+      },
+    );
+
+    // Start services
+    ref.read(notificationServiceProvider).start();
+    ref.read(challengeServiceProvider).start();
+
+    // Listen for connectivity changes and perform actions accordingly.
+    ref.listenManual(connectivityChangesProvider, (prev, current) async {
+      final prevWasOffline = prev?.value?.isOnline == false;
+      final currentIsOnline = current.value?.isOnline == true;
+
+      // Play registered moves whenever the app comes back online.
+      if (prevWasOffline && currentIsOnline) {
+        final nbMovesPlayed = await ref.read(correspondenceServiceProvider).playRegisteredMoves();
+        if (nbMovesPlayed > 0) {
+          ref.invalidate(ongoingGamesProvider);
+        }
+      }
+
+      // Perform actions once when the app comes online.
+      if (current.value?.isOnline == true && !_firstTimeOnlineCheck) {
+        _firstTimeOnlineCheck = true;
+        ref.read(correspondenceServiceProvider).syncGames();
+      }
+
+      final socketClient = ref.read(socketPoolProvider).currentClient;
+      if (current.value?.isOnline == true &&
+          current.value?.appState == AppLifecycleState.resumed &&
+          !socketClient.isActive) {
+        socketClient.connect();
+      } else if (current.value?.isOnline == false) {
+        socketClient.close();
+      }
+    });
+
     super.initState();
   }
 
   @override
+  void dispose() {
+    _appLifecycleListener?.dispose();
+    super.dispose();
+  }
+
+  @override
   Widget build(BuildContext context) {
-    final themeMode = ref.watch(
-      generalPreferencesProvider.select(
-        (state) => state.themeMode,
-      ),
-    );
-    final brightness = ref.watch(currentBrightnessProvider);
-    final boardTheme = ref.watch(
-      boardPreferencesProvider.select(
-        (state) => state.boardTheme,
-      ),
-    );
+    final generalPrefs = ref.watch(generalPreferencesProvider);
+    final boardPrefs = ref.watch(boardPreferencesProvider);
+    final (light: themeLight, dark: themeDark) = makeAppTheme(context, generalPrefs, boardPrefs);
+
+    final isIOS = Theme.of(context).platform == TargetPlatform.iOS;
     final remainingHeight = estimateRemainingHeightLeftBoard(context);
 
     return MaterialApp(
       localizationsDelegates: AppLocalizations.localizationsDelegates,
       supportedLocales: kSupportedLocales,
       onGenerateTitle: (BuildContext context) => 'lichess.org',
-      theme: ThemeData(
-        navigationBarTheme: NavigationBarTheme.of(context).copyWith(
-          height: remainingHeight < kSmallRemainingHeightLeftBoardThreshold
-              ? 60
-              : null,
-        ),
-        textTheme: defaultTargetPlatform == TargetPlatform.iOS
-            ? brightness == Brightness.light
-                ? Typography.blackCupertino
-                : Typography.whiteCupertino
-            : null,
-        colorSchemeSeed: boardTheme.colors.darkSquare,
-        useMaterial3: true,
-        brightness: brightness,
-        cardTheme: CardTheme(
-          surfaceTintColor:
-              brightness == Brightness.light ? Colors.black : Colors.white,
-        ),
+      locale: generalPrefs.locale,
+      theme: themeLight.copyWith(
+        navigationBarTheme: NavigationBarTheme.of(
+          context,
+        ).copyWith(height: remainingHeight < kSmallRemainingHeightLeftBoardThreshold ? 60 : null),
       ),
-      themeMode: themeMode,
-      builder: (context, child) {
-        return CupertinoTheme(
-          data: CupertinoThemeData(
-            brightness: brightness,
-            barBackgroundColor: const CupertinoDynamicColor.withBrightness(
-              color: Color(0xC8F9F9F9),
-              darkColor: Color(0xC81D1D1D),
-            ),
-            scaffoldBackgroundColor: brightness == Brightness.light
-                ? CupertinoColors.systemGroupedBackground
-                : null,
-          ),
-          child: Material(child: child),
-        );
+      darkTheme: themeDark.copyWith(
+        navigationBarTheme: NavigationBarTheme.of(
+          context,
+        ).copyWith(height: remainingHeight < kSmallRemainingHeightLeftBoardThreshold ? 60 : null),
+      ),
+      themeMode:
+          generalPrefs.isForcedDarkMode
+              ? ThemeMode.dark
+              : switch (generalPrefs.themeMode) {
+                BackgroundThemeMode.light => ThemeMode.light,
+                BackgroundThemeMode.dark => ThemeMode.dark,
+                BackgroundThemeMode.system => ThemeMode.system,
+              },
+      builder:
+          isIOS
+              ? (context, child) => IconTheme.merge(
+                data: IconThemeData(color: CupertinoTheme.of(context).textTheme.textStyle.color),
+                child: Material(color: Colors.transparent, child: child),
+              )
+              : null,
+      onGenerateRoute:
+          (settings) =>
+              settings.name != null ? resolveAppLinkUri(context, Uri.parse(settings.name!)) : null,
+      onGenerateInitialRoutes: (initialRoute) {
+        final homeRoute = buildScreenRoute<void>(context, screen: const BottomNavScaffold());
+        return <Route<dynamic>?>[
+          homeRoute,
+          resolveAppLinkUri(context, Uri.parse(initialRoute)),
+        ].nonNulls.toList(growable: false);
       },
-      home: const BottomNavScaffold(),
-      navigatorObservers: [
-        immersiveModeRouteObserver,
-        wakelockRouteObserver,
-        tvRouteObserver,
-      ],
-    );
-  }
-
-  // Code taken from https://stackoverflow.com/questions/63631522/flutter-120fps-issue
-  /// Enables high refresh rate for devices where it was previously disabled
-  Future<void> setOptimalDisplayMode() async {
-    final List<DisplayMode> supported = await FlutterDisplayMode.supported;
-    final DisplayMode active = await FlutterDisplayMode.active;
-
-    final List<DisplayMode> sameResolution = supported
-        .where(
-          (DisplayMode m) =>
-              m.width == active.width && m.height == active.height,
-        )
-        .toList()
-      ..sort(
-        (DisplayMode a, DisplayMode b) =>
-            b.refreshRate.compareTo(a.refreshRate),
-      );
-
-    final DisplayMode mostOptimalMode =
-        sameResolution.isNotEmpty ? sameResolution.first : active;
-
-    // This setting is per session.
-    await FlutterDisplayMode.setPreferredMode(mostOptimalMode);
-  }
-}
-
-class LoadApp extends ConsumerWidget {
-  const LoadApp({super.key});
-
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
-    ref.listen<AsyncValue<AppDependencies>>(
-      appDependenciesProvider,
-      (_, state) {
-        if (state.hasValue) {
-          FlutterNativeSplash.remove();
-        }
-      },
-    );
-
-    final appDependencies = ref.watch(appDependenciesProvider);
-    return appDependencies.when(
-      data: (_) => const App(),
-      // loading screen is handled by the native splash screen
-      loading: () => const SizedBox.shrink(),
-      error: (err, st) {
-        debugPrint(
-          'SEVERE: [App] could not load app dependencies; $err\n$st',
-        );
-        return const SizedBox.shrink();
-      },
+      navigatorObservers: [rootNavPageRouteObserver],
     );
   }
 }

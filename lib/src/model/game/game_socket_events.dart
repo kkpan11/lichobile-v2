@@ -1,16 +1,13 @@
-import 'package:freezed_annotation/freezed_annotation.dart';
-import 'package:deep_pick/deep_pick.dart';
+import 'package:clock/clock.dart';
 import 'package:dartchess/dartchess.dart';
+import 'package:deep_pick/deep_pick.dart';
 import 'package:fast_immutable_collections/fast_immutable_collections.dart';
-
+import 'package:freezed_annotation/freezed_annotation.dart';
 import 'package:lichess_mobile/src/model/common/chess.dart';
+import 'package:lichess_mobile/src/model/common/eval.dart';
 import 'package:lichess_mobile/src/model/common/id.dart';
-import 'package:lichess_mobile/src/model/common/perf.dart';
-import 'package:lichess_mobile/src/model/common/speed.dart';
-import 'package:lichess_mobile/src/model/account/account_preferences.dart';
-import 'package:lichess_mobile/src/model/game/game.dart';
 import 'package:lichess_mobile/src/model/game/game_status.dart';
-import 'package:lichess_mobile/src/model/game/material_diff.dart';
+import 'package:lichess_mobile/src/model/game/playable_game.dart';
 import 'package:lichess_mobile/src/model/game/player.dart';
 import 'package:lichess_mobile/src/utils/json.dart';
 
@@ -18,139 +15,15 @@ part 'game_socket_events.freezed.dart';
 
 @freezed
 class GameFullEvent with _$GameFullEvent {
-  const factory GameFullEvent({
-    required PlayableGame game,
-    required int socketEventVersion,
-  }) = _GameFullEvent;
+  const factory GameFullEvent({required PlayableGame game, required int socketEventVersion}) =
+      _GameFullEvent;
 
   factory GameFullEvent.fromJson(Map<String, dynamic> json) {
     return GameFullEvent(
-      game: _playableGameFromPick(pick(json).required()),
+      game: PlayableGame.fromServerJson(json),
       socketEventVersion: json['socket'] as int,
     );
   }
-}
-
-PlayableGame _playableGameFromPick(RequiredPick pick) {
-  final meta = _playableGameMetaFromPick(pick('game').required());
-
-  // assume lichess always send initialFen with fromPosition and chess960
-  Position position =
-      (meta.variant == Variant.fromPosition || meta.variant == Variant.chess960)
-          ? Chess.fromSetup(Setup.parseFen(meta.initialFen!))
-          : meta.variant.initialPosition;
-
-  int ply = 0;
-  final steps = [GameStep(ply: ply, position: position)];
-  final pgn = pick('game', 'pgn').asStringOrNull();
-  final moves = pgn != null && pgn != '' ? pgn.split(' ') : null;
-  if (moves != null && moves.isNotEmpty) {
-    for (final san in moves) {
-      ply++;
-      final move = position.parseSan(san);
-      // assume lichess only sends correct moves
-      position = position.playUnchecked(move!);
-      steps.add(
-        GameStep(
-          ply: ply,
-          sanMove: SanMove(san, move),
-          position: position,
-          diff: MaterialDiff.fromBoard(position.board),
-        ),
-      );
-    }
-  }
-
-  return PlayableGame(
-    meta: meta,
-    steps: steps.toIList(),
-    white: pick('white').letOrThrow(_playerFromUserGamePick),
-    black: pick('black').letOrThrow(_playerFromUserGamePick),
-    clock: pick('clock').letOrNull(_playableClockDataFromPick),
-    status: pick('game', 'status').asGameStatusOrThrow(),
-    winner: pick('game', 'winner').asSideOrNull(),
-    boosted: pick('game', 'boosted').asBoolOrNull(),
-    isThreefoldRepetition: pick('game', 'threefold').asBoolOrNull(),
-    moretimeable: pick('moretimeable').asBoolOrFalse(),
-    takebackable: pick('takebackable').asBoolOrFalse(),
-    youAre: pick('youAre').asSideOrNull(),
-    prefs: pick('prefs').letOrNull(_gamePrefsFromPick),
-    expiration: pick('expiration').letOrNull(
-      (it) {
-        final idle = it('idleMillis').asDurationFromMilliSecondsOrThrow();
-        return (
-          idle: idle,
-          timeToMove: it('millisToMove').asDurationFromMilliSecondsOrThrow(),
-          movedAt: DateTime.now().subtract(idle),
-        );
-      },
-    ),
-    rematch: pick('game', 'rematch').asGameIdOrNull(),
-  );
-}
-
-PlayableGameMeta _playableGameMetaFromPick(RequiredPick pick) {
-  return PlayableGameMeta(
-    id: pick('id').asGameIdOrThrow(),
-    rated: pick('rated').asBoolOrThrow(),
-    speed: pick('speed').asSpeedOrThrow(),
-    perf: pick('perf').asPerfOrThrow(),
-    variant: pick('variant').asVariantOrThrow(),
-    source: pick('source').letOrThrow(
-      (pick) =>
-          GameSource.nameMap[pick.asStringOrThrow()] ?? GameSource.unknown,
-    ),
-    initialFen: pick('initialFen').asStringOrNull(),
-    startedAtTurn: pick('startedAtTurn').asIntOrNull(),
-    rules: pick('rules').letOrNull(
-      (it) => ISet(
-        pick.asListOrThrow(
-          (e) => GameRule.nameMap[e.asStringOrThrow()] ?? GameRule.unknown,
-        ),
-      ),
-    ),
-  );
-}
-
-GamePrefs _gamePrefsFromPick(RequiredPick pick) {
-  return (
-    showRatings: pick('showRatings').asBoolOrFalse(),
-    enablePremove: pick('enablePremove').asBoolOrFalse(),
-    autoQueen: AutoQueen.fromInt(pick('autoQueen').asIntOrThrow()),
-    confirmResign: pick('confirmResign').asBoolOrFalse(),
-    submitMove: pick('submitMove').asBoolOrFalse(),
-    zenMode: Zen.fromInt(pick('zen').asIntOrThrow()),
-  );
-}
-
-Player _playerFromUserGamePick(RequiredPick pick) {
-  return Player(
-    id: pick('user', 'id').asUserIdOrNull(),
-    name: pick('user', 'name').asStringOrNull(),
-    patron: pick('user', 'patron').asBoolOrNull(),
-    title: pick('user', 'title').asStringOrNull(),
-    rating: pick('rating').asIntOrNull(),
-    provisional: pick('provisional').asBoolOrNull(),
-    ratingDiff: pick('ratingDiff').asIntOrNull(),
-    aiLevel: pick('aiLevel').asIntOrNull(),
-    onGame: pick('onGame').asBoolOrNull(),
-    isGone: pick('isGone').asBoolOrNull(),
-    offeringDraw: pick('offeringDraw').asBoolOrNull(),
-    offeringRematch: pick('offeringRematch').asBoolOrNull(),
-    proposingTakeback: pick('proposingTakeback').asBoolOrNull(),
-  );
-}
-
-PlayableClockData _playableClockDataFromPick(RequiredPick pick) {
-  return PlayableClockData(
-    initial: pick('initial').asDurationFromSecondsOrThrow(),
-    increment: pick('increment').asDurationFromSecondsOrThrow(),
-    running: pick('running').asBoolOrThrow(),
-    white: pick('white').asDurationFromSecondsOrThrow(),
-    black: pick('black').asDurationFromSecondsOrThrow(),
-    emergency: pick('emerg').asDurationFromSecondsOrNull(),
-    moreTime: pick('moretime').asDurationFromSecondsOrNull(),
-  );
 }
 
 @freezed
@@ -166,7 +39,7 @@ class MoveEvent with _$MoveEvent {
     bool? blackOfferingDraw,
     GameStatus? status,
     Side? winner,
-    ({Duration white, Duration black, Duration? lag})? clock,
+    ({Duration white, Duration black, Duration? lag, DateTime at})? clock,
   }) = _MoveEvent;
 
   factory MoveEvent.fromJson(Map<String, dynamic> json) =>
@@ -204,10 +77,10 @@ MoveEvent _socketMoveEventFromPick(RequiredPick pick) {
     blackOfferingDraw: pick('bDraw').asBoolOrNull(),
     clock: pick('clock').letOrNull(
       (it) => (
+        at: clock.now(),
         white: it('white').asDurationFromSecondsOrThrow(),
         black: it('black').asDurationFromSecondsOrThrow(),
-        lag: it('lag')
-            .letOrNull((it) => Duration(milliseconds: it.asIntOrThrow() * 10)),
+        lag: it('lag').letOrNull((it) => Duration(milliseconds: it.asIntOrThrow() * 10)),
       ),
     ),
   );
@@ -233,12 +106,9 @@ GameEndEvent _gameEndEventFromPick(RequiredPick pick) {
   return GameEndEvent(
     status: pick('status').asGameStatusOrThrow(),
     winner: pick('winner').asSideOrNull(),
-    ratingDiff: pick('ratingDiff').letOrNull(
-      (it) => (
-        white: it('white').asIntOrThrow(),
-        black: it('black').asIntOrThrow(),
-      ),
-    ),
+    ratingDiff: pick(
+      'ratingDiff',
+    ).letOrNull((it) => (white: it('white').asIntOrThrow(), black: it('black').asIntOrThrow())),
     boosted: pick('boosted').asBoolOrNull(),
     clock: pick('clock').letOrNull(
       (it) => (
@@ -248,3 +118,131 @@ GameEndEvent _gameEndEventFromPick(RequiredPick pick) {
     ),
   );
 }
+
+@freezed
+class ServerEvalEvent with _$ServerEvalEvent {
+  const ServerEvalEvent._();
+
+  const factory ServerEvalEvent({
+    required IList<ExternalEval> evals,
+    required Map<String, dynamic> tree,
+    ServerAnalysis? analysis,
+    GameDivision? division,
+    required bool isAnalysisComplete,
+  }) = _ServerEvalEvent;
+
+  factory ServerEvalEvent.fromJson(Map<String, dynamic> json) =>
+      _serverEvalEventFromPick(pick(json).required());
+}
+
+ServerEvalEvent _serverEvalEventFromPick(RequiredPick pick) {
+  final tree = pick('tree').asMapOrThrow<String, dynamic>();
+  Map<String, dynamic>? node = tree;
+  final List<ExternalEval> evals = [];
+
+  bool isAnalysisIncomplete = false;
+
+  String? nextVariation;
+
+  while (node != null) {
+    final ply = node['ply'] as int;
+    final san = node['san'] as String?;
+    final children = node['children'] as List<dynamic>?;
+    final firstChild = children?.firstOrNull as Map<String, dynamic>?;
+    final eval = node['eval'] as Map<String, dynamic>?;
+
+    if (eval == null && firstChild != null && ply <= 300 && ply > 0) {
+      isAnalysisIncomplete = true;
+    }
+
+    final glyphs = node['glyphs'] as List<dynamic>?;
+    final glyph = glyphs?.first as Map<String, dynamic>?;
+    final comments = node['comments'] as List<dynamic>?;
+    final comment = comments?.first as Map<String, dynamic>?;
+    final judgment =
+        glyph != null && comment != null
+            ? (name: _nagToJugdmentName(glyph['id'] as int), comment: comment['text'] as String)
+            : null;
+
+    final variation = nextVariation;
+
+    final buffer = StringBuffer();
+    if (children != null && children.length > 1) {
+      Map<String, dynamic>? variationNode = children[1] as Map<String, dynamic>;
+      while (variationNode != null) {
+        final san = variationNode['san'] as String;
+        if (buffer.isEmpty) {
+          buffer.write(san);
+        } else {
+          buffer.write(' $san');
+        }
+        final nestedChildren = variationNode['children'] as List<dynamic>?;
+        if (nestedChildren != null && nestedChildren.isNotEmpty) {
+          variationNode = nestedChildren.first as Map<String, dynamic>;
+        } else {
+          break;
+        }
+      }
+    }
+    nextVariation = buffer.isEmpty ? null : buffer.toString();
+    // make it compatible with lichess API GET /game/export which doesn't return
+    // an eval of the starting position
+    // also make sure to not add an empty eval for checkmate (or stalemate) which
+    // would be the leaf node with no eval
+    if (san != null && (eval != null || firstChild != null)) {
+      evals.add(
+        ExternalEval(
+          cp: eval?['cp'] as int?,
+          mate: eval?['mate'] as int?,
+          bestMove: eval?['best'] as String?,
+          judgment: judgment,
+          variation: variation,
+        ),
+      );
+    }
+    node = firstChild;
+  }
+
+  return ServerEvalEvent(
+    tree: tree,
+    evals: evals.lock,
+    analysis: pick('analysis').letOrNull(
+      (it) => (
+        id: GameId(it('id').asStringOrThrow()),
+        white: it('white').letOrThrow(
+          (pa) => PlayerAnalysis(
+            inaccuracies: pa('inaccuracy').asIntOrThrow(),
+            mistakes: pa('mistake').asIntOrThrow(),
+            blunders: pa('blunder').asIntOrThrow(),
+            acpl: pa('acpl').asIntOrNull(),
+            accuracy: pa('accuracy').asIntOrNull(),
+          ),
+        ),
+        black: it('black').letOrThrow(
+          (pa) => PlayerAnalysis(
+            inaccuracies: pa('inaccuracy').asIntOrThrow(),
+            mistakes: pa('mistake').asIntOrThrow(),
+            blunders: pa('blunder').asIntOrThrow(),
+            acpl: pa('acpl').asIntOrNull(),
+            accuracy: pa('accuracy').asIntOrNull(),
+          ),
+        ),
+      ),
+    ),
+    isAnalysisComplete: !isAnalysisIncomplete,
+    division: pick(
+      'division',
+    ).letOrNull((it) => (middle: it('middle').asIntOrNull(), end: it('end').asIntOrNull())),
+  );
+}
+
+String _nagToJugdmentName(int nag) => switch (nag) {
+  6 => 'Inaccuracy',
+  2 => 'Mistake',
+  4 => 'Blunder',
+  int() => '',
+};
+
+typedef ServerAnalysis = ({GameId id, PlayerAnalysis white, PlayerAnalysis black});
+
+typedef GameDivision = ({int? middle, int? end});

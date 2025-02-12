@@ -1,40 +1,31 @@
-import 'dart:math' as math;
-import 'package:flutter/foundation.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
 import 'package:lichess_mobile/src/constants.dart';
+import 'package:lichess_mobile/src/styles/styles.dart';
 
 /// A simple widget that builds different things on different platforms.
 class PlatformWidget extends StatelessWidget {
-  const PlatformWidget({
-    super.key,
-    required this.androidBuilder,
-    required this.iosBuilder,
-  });
+  const PlatformWidget({super.key, required this.androidBuilder, required this.iosBuilder});
 
   final WidgetBuilder androidBuilder;
   final WidgetBuilder iosBuilder;
 
   @override
   Widget build(BuildContext context) {
-    switch (defaultTargetPlatform) {
+    switch (Theme.of(context).platform) {
       case TargetPlatform.android:
         return androidBuilder(context);
       case TargetPlatform.iOS:
         return iosBuilder(context);
       default:
-        assert(false, 'Unexpected platform $defaultTargetPlatform');
+        assert(false, 'Unexpected platform ${Theme.of(context).platform}');
         return const SizedBox.shrink();
     }
   }
 }
 
-typedef ConsumerWidgetBuilder = Widget Function(
-  BuildContext context,
-  WidgetRef ref,
-);
+typedef ConsumerWidgetBuilder = Widget Function(BuildContext context, WidgetRef ref);
 
 /// A widget that builds different things on different platforms with riverpod.
 class ConsumerPlatformWidget extends StatelessWidget {
@@ -51,13 +42,13 @@ class ConsumerPlatformWidget extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    switch (defaultTargetPlatform) {
+    switch (Theme.of(context).platform) {
       case TargetPlatform.android:
         return androidBuilder(context, ref);
       case TargetPlatform.iOS:
         return iosBuilder(context, ref);
       default:
-        assert(false, 'Unexpected platform $defaultTargetPlatform');
+        assert(false, 'Unexpected platform ${Theme.of(context).platform}');
         return const SizedBox.shrink();
     }
   }
@@ -72,13 +63,18 @@ class PlatformCard extends StatelessWidget {
     this.semanticContainer = true,
     this.borderRadius,
     this.elevation,
+    this.color,
+    this.shadowColor,
+    this.clipBehavior,
   });
 
   final Widget child;
   final bool semanticContainer;
   final BorderRadius? borderRadius;
-
   final double? elevation;
+  final Color? color;
+  final Color? shadowColor;
+  final Clip? clipBehavior;
 
   /// The empty space that surrounds the card.
   ///
@@ -90,47 +86,33 @@ class PlatformCard extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final MediaQueryData mediaQueryData = MediaQuery.of(context);
-    final cupertinoBrightness =
-        CupertinoTheme.maybeBrightnessOf(context) ?? Brightness.light;
-    return MediaQuery(
-      data: mediaQueryData.copyWith(
-        textScaleFactor: math.min(
-          mediaQueryData.textScaleFactor,
-          kCardTextScaleFactor,
-        ),
+    return MediaQuery.withClampedTextScaling(
+      maxScaleFactor: kCardTextScaleFactor,
+      child: Card(
+        shape:
+            borderRadius != null
+                ? RoundedRectangleBorder(borderRadius: borderRadius!)
+                : const RoundedRectangleBorder(borderRadius: Styles.cardBorderRadius),
+        color: color,
+        shadowColor: shadowColor,
+        semanticContainer: semanticContainer,
+        elevation: elevation,
+        margin: margin,
+        clipBehavior: clipBehavior,
+        child: child,
       ),
-      child: defaultTargetPlatform == TargetPlatform.iOS
-          ? Card(
-              margin: margin ?? EdgeInsets.zero,
-              elevation: elevation ?? 0,
-              color: cupertinoBrightness == Brightness.light
-                  ? CupertinoColors.systemBackground
-                  : CupertinoColors.secondarySystemBackground
-                      .resolveFrom(context),
-              shape: borderRadius != null
-                  ? RoundedRectangleBorder(
-                      borderRadius: borderRadius!,
-                    )
-                  : const RoundedRectangleBorder(
-                      borderRadius: BorderRadius.all(Radius.circular(10.0)),
-                    ),
-              semanticContainer: semanticContainer,
-              child: child,
-            )
-          : Card(
-              shape: borderRadius != null
-                  ? RoundedRectangleBorder(
-                      borderRadius: borderRadius!,
-                    )
-                  : const RoundedRectangleBorder(
-                      borderRadius: BorderRadius.all(Radius.circular(10.0)),
-                    ),
-              semanticContainer: semanticContainer,
-              elevation: elevation,
-              margin: margin,
-              child: child,
-            ),
+    );
+  }
+}
+
+class PlatformShareIcon extends StatelessWidget {
+  const PlatformShareIcon({super.key});
+
+  @override
+  Widget build(BuildContext context) {
+    return PlatformWidget(
+      androidBuilder: (_) => const Icon(Icons.share),
+      iosBuilder: (_) => const Icon(CupertinoIcons.share),
     );
   }
 }

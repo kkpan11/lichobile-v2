@@ -1,110 +1,81 @@
-import 'package:json_annotation/json_annotation.dart';
 import 'package:deep_pick/deep_pick.dart';
 
-part 'id.g.dart';
+extension type const StringId(String value) {
+  StringId.fromJson(dynamic json) : this(json as String);
+  String toJson() => value;
 
-abstract class ID {
-  const ID(this.value);
-
-  final String value;
-
-  @override
-  String toString() => value;
-
-  Map<String, dynamic> toJson();
-
-  @override
-  bool operator ==(Object other) =>
-      identical(this, other) ||
-      other is ID && runtimeType == other.runtimeType && value == other.value;
-
-  @override
-  int get hashCode => value.hashCode;
+  int get length => value.length;
+  bool startsWith(String prefix) => value.startsWith(prefix);
 }
 
-@JsonSerializable()
-class GameAnyId extends ID {
-  const GameAnyId(super.value);
+extension type const IntId(int value) {}
 
+extension type const GameAnyId._(String value) implements StringId {
+  GameAnyId(this.value) : assert(value.length == 8 || value.length == 12);
   GameId get gameId => GameId(value.substring(0, 8));
   bool get isFullId => value.length == 12;
+  bool get isGameId => value.length == 8;
   GameFullId? get gameFullId => isFullId ? GameFullId(value) : null;
 
-  factory GameAnyId.fromJson(Map<String, dynamic> json) =>
-      _$GameAnyIdFromJson(json);
-
-  @override
-  Map<String, dynamic> toJson() => _$GameAnyIdToJson(this);
+  GameAnyId.fromJson(dynamic json) : this(json as String);
 }
 
-@JsonSerializable()
-class GameId extends ID {
-  const GameId(super.value) : assert(value.length == 8);
+extension type const GameId._(String value) implements StringId, GameAnyId {
+  const GameId(this.value) : assert(value.length == 8);
 
-  factory GameId.fromJson(Map<String, dynamic> json) => _$GameIdFromJson(json);
+  bool get isValid => RegExp(r'''[\w-]{8}''').hasMatch(value);
 
-  @override
-  Map<String, dynamic> toJson() => _$GameIdToJson(this);
+  GameId.fromJson(dynamic json) : this(json as String);
 }
 
-@JsonSerializable()
-class GameFullId extends ID {
-  const GameFullId(super.value) : assert(value.length == 12);
+extension type const GameFullId._(String value) implements StringId, GameAnyId {
+  const GameFullId(this.value) : assert(value.length == 12);
 
-  factory GameFullId.fromJson(Map<String, dynamic> json) =>
-      _$GameFullIdFromJson(json);
-
-  @override
-  Map<String, dynamic> toJson() => _$GameFullIdToJson(this);
+  GameFullId.fromJson(dynamic json) : this(json as String);
 }
 
-@JsonSerializable()
-class GamePlayerId extends ID {
-  const GamePlayerId(super.value) : assert(value.length == 4);
+extension type const GamePlayerId._(String value) implements StringId {
+  const GamePlayerId(this.value) : assert(value.length == 4);
 
-  factory GamePlayerId.fromJson(Map<String, dynamic> json) =>
-      _$GamePlayerIdFromJson(json);
-
-  @override
-  Map<String, dynamic> toJson() => _$GamePlayerIdToJson(this);
+  GamePlayerId.fromJson(dynamic json) : this(json as String);
 }
 
-@JsonSerializable()
-class PuzzleId extends ID {
-  const PuzzleId(super.value);
-
-  factory PuzzleId.fromJson(Map<String, dynamic> json) =>
-      _$PuzzleIdFromJson(json);
-
-  @override
-  Map<String, dynamic> toJson() => _$PuzzleIdToJson(this);
+extension type const PuzzleId(String value) implements StringId {
+  PuzzleId.fromJson(dynamic json) : this(json as String);
 }
 
-@JsonSerializable()
-class UserId extends ID {
-  const UserId(super.value);
-
-  factory UserId.fromUserName(String userName) =>
-      UserId(userName.toLowerCase());
-
-  factory UserId.fromJson(Map<String, dynamic> json) => _$UserIdFromJson(json);
-
-  @override
-  Map<String, dynamic> toJson() => _$UserIdToJson(this);
+extension type const UserId(String value) implements StringId {
+  UserId.fromUserName(String userName) : this(userName.toLowerCase());
+  UserId.fromJson(dynamic json) : this(json as String);
 }
+
+extension type const ChallengeId(String value) implements StringId {
+  ChallengeId.fromJson(dynamic json) : this(json as String);
+}
+
+extension type const BroadcastTournamentId(String value) implements StringId {}
+
+extension type const BroadcastRoundId(String value) implements StringId {}
+
+extension type const BroadcastGameId(String value) implements StringId {}
+
+extension type const StudyId(String value) implements StringId {
+  StudyId.fromJson(dynamic json) : this(json as String);
+}
+
+extension type const StudyChapterId(String value) implements StringId {
+  StudyChapterId.fromJson(dynamic json) : this(json as String);
+}
+
+extension type const FideId(int value) implements IntId {}
 
 extension IDPick on Pick {
   UserId asUserIdOrThrow() {
     final value = required().value;
-    if (value is UserId) {
-      return value;
-    }
     if (value is String) {
       return UserId(value);
     }
-    throw PickException(
-      "value $value at $debugParsingExit can't be casted to UserId",
-    );
+    throw PickException("value $value at $debugParsingExit can't be casted to UserId");
   }
 
   UserId? asUserIdOrNull() {
@@ -118,15 +89,10 @@ extension IDPick on Pick {
 
   GameId asGameIdOrThrow() {
     final value = required().value;
-    if (value is GameId) {
-      return value;
-    }
     if (value is String) {
       return GameId(value);
     }
-    throw PickException(
-      "value $value at $debugParsingExit can't be casted to GameId",
-    );
+    throw PickException("value $value at $debugParsingExit can't be casted to GameId");
   }
 
   GameId? asGameIdOrNull() {
@@ -140,15 +106,10 @@ extension IDPick on Pick {
 
   GameFullId asGameFullIdOrThrow() {
     final value = required().value;
-    if (value is GameFullId) {
-      return value;
-    }
     if (value is String) {
       return GameFullId(value);
     }
-    throw PickException(
-      "value $value at $debugParsingExit can't be casted to GameId",
-    );
+    throw PickException("value $value at $debugParsingExit can't be casted to GameId");
   }
 
   GameFullId? asGameFullIdOrNull() {
@@ -162,21 +123,111 @@ extension IDPick on Pick {
 
   PuzzleId asPuzzleIdOrThrow() {
     final value = required().value;
-    if (value is PuzzleId) {
-      return value;
-    }
     if (value is String) {
       return PuzzleId(value);
     }
-    throw PickException(
-      "value $value at $debugParsingExit can't be casted to PuzzleId",
-    );
+    throw PickException("value $value at $debugParsingExit can't be casted to PuzzleId");
   }
 
   PuzzleId? asPuzzleIdOrNull() {
     if (value == null) return null;
     try {
       return asPuzzleIdOrThrow();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  ChallengeId asChallengeIdOrThrow() {
+    final value = required().value;
+    if (value is String) {
+      return ChallengeId(value);
+    }
+    throw PickException("value $value at $debugParsingExit can't be casted to ChallengeId");
+  }
+
+  ChallengeId? asChallengeIdOrNull() {
+    if (value == null) return null;
+    try {
+      return asChallengeIdOrThrow();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  BroadcastTournamentId asBroadcastTournamentIdOrThrow() {
+    final value = required().value;
+    if (value is String) {
+      return BroadcastTournamentId(value);
+    }
+    throw PickException(
+      "value $value at $debugParsingExit can't be casted to BroadcastTournamentId",
+    );
+  }
+
+  BroadcastTournamentId? asBroadcastTournamentIdOrNull() {
+    if (value == null) return null;
+    try {
+      return asBroadcastTournamentIdOrThrow();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  BroadcastRoundId asBroadcastRoundIdOrThrow() {
+    final value = required().value;
+    if (value is String) {
+      return BroadcastRoundId(value);
+    }
+    throw PickException("value $value at $debugParsingExit can't be casted to BroadcastRoundId");
+  }
+
+  BroadcastRoundId? asBroadcastRoundIdOrNull() {
+    if (value == null) return null;
+    try {
+      return asBroadcastRoundIdOrThrow();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  BroadcastGameId asBroadcastGameIdOrThrow() {
+    final value = required().value;
+    if (value is String) {
+      return BroadcastGameId(value);
+    }
+    throw PickException("value $value at $debugParsingExit can't be casted to BroadcastGameId");
+  }
+
+  BroadcastGameId? asBroadcastGameIdOrNull() {
+    if (value == null) return null;
+    try {
+      return asBroadcastGameIdOrThrow();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  StudyId asStudyIdOrThrow() {
+    final value = required().value;
+    if (value is String) {
+      return StudyId(value);
+    }
+    throw PickException("value $value at $debugParsingExit can't be casted to StudyId");
+  }
+
+  FideId asFideIdOrThrow() {
+    final value = required().value;
+    if (value is int && value != 0) {
+      return FideId(value);
+    }
+    throw PickException("value $value at $debugParsingExit can't be casted to FideId");
+  }
+
+  FideId? asFideIdOrNull() {
+    if (value == null) return null;
+    try {
+      return asFideIdOrThrow();
     } catch (_) {
       return null;
     }

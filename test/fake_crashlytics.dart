@@ -1,7 +1,7 @@
-import 'package:flutter/foundation.dart';
-import 'package:mocktail/mocktail.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'package:firebase_crashlytics/firebase_crashlytics.dart';
+import 'package:flutter/foundation.dart';
+import 'package:mocktail/mocktail.dart';
 
 // ignore_for_file: avoid_implementing_value_types
 // ignore_for_file: type_annotate_public_apis
@@ -57,9 +57,7 @@ class FakeCrashlytics implements FirebaseCrashlytics {
   }) async {}
 
   @override
-  Future<void> recordFlutterFatalError(
-    FlutterErrorDetails flutterErrorDetails,
-  ) async {}
+  Future<void> recordFlutterFatalError(FlutterErrorDetails flutterErrorDetails) async {}
 
   @override
   Future<void> sendUnsentReports() async {}

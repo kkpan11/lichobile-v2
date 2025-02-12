@@ -1,7 +1,5 @@
-import 'package:flutter/foundation.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
-
 import 'package:lichess_mobile/src/styles/styles.dart';
 import 'package:lichess_mobile/src/widgets/list.dart';
 
@@ -12,20 +10,23 @@ class SettingsListTile extends StatelessWidget {
     required this.settingsLabel,
     required this.settingsValue,
     required this.onTap,
-    this.additionalInfo,
+    this.explanation,
     this.showCupertinoTrailingValue = true,
     super.key,
   });
 
-  final Icon? icon;
+  /// The icon of the settings value.
+  final Widget? icon;
 
   /// The label of the settings value.
   final Text settingsLabel;
 
   final String settingsValue;
-  final void Function() onTap;
 
-  final String? additionalInfo;
+  final void Function()? onTap;
+
+  /// The optional explanation of the settings.
+  final String? explanation;
 
   /// Whether to show the value in the trailing position on iOS.
   ///
@@ -34,36 +35,32 @@ class SettingsListTile extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final tile = PlatformListTile(
-      leading: icon,
-      title: _SettingsTitle(
-        title: settingsLabel,
-        additionalInfo: additionalInfo,
-      ),
-      additionalInfo: showCupertinoTrailingValue ? Text(settingsValue) : null,
-      subtitle: defaultTargetPlatform == TargetPlatform.android
-          ? Text(
-              settingsValue,
-              style:
-                  TextStyle(color: textShade(context, Styles.subtitleOpacity)),
-            )
-          : null,
-      onTap: onTap,
-      trailing: defaultTargetPlatform == TargetPlatform.iOS
-          ? const CupertinoListTileChevron()
-          : null,
-    );
     return Semantics(
       container: true,
       button: true,
       label: '$settingsLabel: $settingsValue',
       excludeSemantics: true,
-      child: additionalInfo != null
-          ? _SettingsInfoTooltip(
-              message: additionalInfo!,
-              child: tile,
-            )
-          : tile,
+      child: PlatformListTile(
+        leading: icon,
+        title: _SettingsTitle(title: settingsLabel),
+        additionalInfo: showCupertinoTrailingValue ? Text(settingsValue) : null,
+        subtitle:
+            Theme.of(context).platform == TargetPlatform.android
+                ? Text(
+                  settingsValue,
+                  style: TextStyle(color: textShade(context, Styles.subtitleOpacity)),
+                )
+                : explanation != null
+                ? Text(explanation!, maxLines: 5)
+                : null,
+        onTap: onTap,
+        trailing:
+            Theme.of(context).platform == TargetPlatform.iOS
+                ? const CupertinoListTileChevron()
+                : explanation != null
+                ? _SettingsInfoTooltip(message: explanation!, child: const Icon(Icons.info_outline))
+                : null,
+      ),
     );
   }
 }
@@ -73,48 +70,106 @@ class SwitchSettingTile extends StatelessWidget {
     required this.title,
     this.subtitle,
     required this.value,
-    this.additionalInfo,
     this.onChanged,
     this.leading,
+    this.padding,
     super.key,
   });
 
   final Text title;
   final Widget? subtitle;
-  final String? additionalInfo;
   final bool value;
   final void Function(bool value)? onChanged;
   final Widget? leading;
+  final EdgeInsetsGeometry? padding;
 
   @override
   Widget build(BuildContext context) {
-    final tile = PlatformListTile(
+    return PlatformListTile(
+      padding: padding,
       leading: leading,
-      title: _SettingsTitle(
-        title: title,
-        additionalInfo: additionalInfo,
-      ),
+      title: _SettingsTitle(title: title),
       subtitle: subtitle,
-      trailing: Switch.adaptive(
-        value: value,
-        onChanged: onChanged,
-      ),
+      trailing: Switch.adaptive(value: value, onChanged: onChanged),
+    );
+  }
+}
+
+class SliderSettingsTile extends StatefulWidget {
+  const SliderSettingsTile({
+    this.icon,
+    required this.value,
+    required this.values,
+    required this.onChangeEnd,
+    this.labelBuilder,
+  });
+
+  final Widget? icon;
+  final double value;
+  final List<double> values;
+  final void Function(double value) onChangeEnd;
+  final String Function(double)? labelBuilder;
+
+  @override
+  State<SliderSettingsTile> createState() => _SliderSettingsTileState();
+}
+
+class _SliderSettingsTileState extends State<SliderSettingsTile> {
+  late int _index = widget.values.indexOf(widget.value);
+
+  @override
+  Widget build(BuildContext context) {
+    final slider = Slider.adaptive(
+      value: _index.toDouble(),
+      min: 0,
+      max: widget.values.length.toDouble() - 1,
+      divisions: widget.values.length - 1,
+      label: widget.labelBuilder?.call(widget.values[_index]) ?? widget.values[_index].toString(),
+      onChanged: (value) {
+        final newIndex = value.toInt();
+        setState(() {
+          _index = newIndex;
+        });
+      },
+      onChangeEnd: (value) {
+        widget.onChangeEnd(widget.values[_index]);
+      },
     );
 
-    return additionalInfo != null
-        ? _SettingsInfoTooltip(
-            message: additionalInfo!,
-            child: tile,
-          )
-        : tile;
+    return PlatformListTile(
+      leading: widget.icon,
+      title: slider,
+      trailing:
+          widget.labelBuilder != null
+              ? Text(widget.labelBuilder!.call(widget.values[_index]))
+              : null,
+    );
+  }
+}
+
+class SettingsSectionTitle extends StatelessWidget {
+  const SettingsSectionTitle(this.title, {super.key});
+
+  final String title;
+
+  @override
+  Widget build(BuildContext context) {
+    return Text(
+      title,
+      style:
+          Theme.of(context).platform == TargetPlatform.iOS
+              ? TextStyle(
+                fontSize: 16,
+                fontWeight: FontWeight.w600,
+                color: CupertinoColors.secondaryLabel.resolveFrom(context),
+              )
+              : null,
+    );
   }
 }
 
 class _SettingsInfoTooltip extends StatelessWidget {
-  const _SettingsInfoTooltip({
-    required this.message,
-    required this.child,
-  });
+  const _SettingsInfoTooltip({required this.message, required this.child});
 
   final String message;
   final Widget child;
@@ -123,6 +178,7 @@ class _SettingsInfoTooltip extends StatelessWidget {
   Widget build(BuildContext context) {
     return Tooltip(
       message: message,
+      triggerMode: TooltipTriggerMode.tap,
       margin: const EdgeInsets.symmetric(horizontal: 16.0),
       showDuration: const Duration(seconds: 4),
       child: child,
@@ -131,43 +187,30 @@ class _SettingsInfoTooltip extends StatelessWidget {
 }
 
 class _SettingsTitle extends StatelessWidget {
-  const _SettingsTitle({
-    required this.title,
-    this.additionalInfo,
-  });
+  const _SettingsTitle({required this.title});
 
   final Text title;
-  final String? additionalInfo;
 
   @override
   Widget build(BuildContext context) {
     return DefaultTextStyle.merge(
+      // forces iOS default font size
+      style:
+          Theme.of(context).platform == TargetPlatform.iOS
+              ? CupertinoTheme.of(context).textTheme.textStyle.copyWith(fontSize: 17.0)
+              : null,
       maxLines: 2,
       overflow: TextOverflow.ellipsis,
-      child: Text.rich(
-        TextSpan(
-          children: [
-            title.textSpan ?? TextSpan(text: title.data),
-            if (additionalInfo != null)
-              WidgetSpan(
-                child: Padding(
-                  padding: const EdgeInsetsDirectional.only(start: 5.0),
-                  child: Icon(
-                    defaultTargetPlatform == TargetPlatform.iOS
-                        ? CupertinoIcons.info
-                        : Icons.info_outline,
-                  ),
-                ),
-              ),
-          ],
-        ),
-      ),
+      child: Text.rich(TextSpan(children: [title.textSpan ?? TextSpan(text: title.data)])),
     );
   }
 }
 
-/// A platform agnostic choice picker
-class ChoicePicker<T extends Enum> extends StatelessWidget {
+/// A platform agnostic choice picker.
+///
+/// It is best used for settings where the user can choose between a relatively
+/// small number of options.
+class ChoicePicker<T> extends StatelessWidget {
   const ChoicePicker({
     super.key,
     required this.choices,
@@ -178,8 +221,7 @@ class ChoicePicker<T extends Enum> extends StatelessWidget {
     required this.onSelectedItemChanged,
     this.tileContentPadding,
     this.margin,
-    this.notchedTile = false,
-    this.showDividerBetweenTiles = false,
+    this.notchedTile = true,
   });
 
   final List<T> choices;
@@ -187,10 +229,7 @@ class ChoicePicker<T extends Enum> extends StatelessWidget {
   final Widget Function(T choice) titleBuilder;
   final Widget Function(T choice)? subtitleBuilder;
   final Widget Function(T choice)? leadingBuilder;
-  final void Function(T choice) onSelectedItemChanged;
-
-  /// Only on android.
-  final bool showDividerBetweenTiles;
+  final void Function(T choice)? onSelectedItemChanged;
 
   /// Android tiles content padding.
   final EdgeInsetsGeometry? tileContentPadding;
@@ -203,51 +242,68 @@ class ChoicePicker<T extends Enum> extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    switch (defaultTargetPlatform) {
+    switch (Theme.of(context).platform) {
       case TargetPlatform.android:
-        final tiles = choices.map((value) {
-          return ListTile(
-            selected: selectedItem == value,
-            trailing: selectedItem == value ? const Icon(Icons.check) : null,
-            contentPadding: tileContentPadding,
-            title: titleBuilder(value),
-            subtitle: subtitleBuilder?.call(value),
-            leading: leadingBuilder?.call(value),
-            onTap: () => onSelectedItemChanged(value),
-          );
-        });
-        return Column(
-          children: [
-            if (showDividerBetweenTiles)
-              ...ListTile.divideTiles(
-                context: context,
-                tiles: tiles,
-              )
-            else
-              ...tiles,
-          ],
+        return Opacity(
+          opacity: onSelectedItemChanged != null ? 1.0 : 0.5,
+          child: ListSection(
+            children: [
+              for (final value in choices)
+                ListTile(
+                  selected: selectedItem == value,
+                  trailing: selectedItem == value ? const Icon(Icons.check) : null,
+                  contentPadding: tileContentPadding,
+                  title: titleBuilder(value),
+                  subtitle: subtitleBuilder?.call(value),
+                  leading: leadingBuilder?.call(value),
+                  onTap: onSelectedItemChanged != null ? () => onSelectedItemChanged!(value) : null,
+                ),
+            ],
+          ),
         );
       case TargetPlatform.iOS:
-        final tileConstructor =
-            notchedTile ? CupertinoListTile.notched : CupertinoListTile.new;
-        return CupertinoListSection.insetGrouped(
-          additionalDividerMargin: notchedTile ? null : 6.0,
-          hasLeading: leadingBuilder != null,
-          margin: margin,
-          children: choices.map((value) {
-            return tileConstructor(
-              trailing: selectedItem == value
-                  ? const Icon(CupertinoIcons.check_mark_circled_solid)
-                  : null,
-              title: titleBuilder(value),
-              subtitle: subtitleBuilder?.call(value),
-              leading: leadingBuilder?.call(value),
-              onTap: () => onSelectedItemChanged(value),
-            );
-          }).toList(growable: false),
+        final tileConstructor = notchedTile ? CupertinoListTile.notched : CupertinoListTile.new;
+        return Padding(
+          padding: margin ?? Styles.bodySectionPadding,
+          child: Opacity(
+            opacity: onSelectedItemChanged != null ? 1.0 : 0.5,
+            child: CupertinoListSection.insetGrouped(
+              backgroundColor: CupertinoTheme.of(context).scaffoldBackgroundColor,
+              decoration: BoxDecoration(
+                color:
+                    Theme.of(context).cardTheme.color ??
+                    Theme.of(context).colorScheme.surfaceContainerLow,
+                borderRadius: const BorderRadius.all(Radius.circular(10.0)),
+              ),
+              separatorColor: Styles.cupertinoSeparatorColor.resolveFrom(context),
+              margin: EdgeInsets.zero,
+              additionalDividerMargin: notchedTile ? null : 6.0,
+              hasLeading: leadingBuilder != null,
+              children: choices
+                  .map((value) {
+                    return tileConstructor(
+                      trailing:
+                          selectedItem == value
+                              ? const Icon(CupertinoIcons.check_mark_circled_solid)
+                              : null,
+                      title: titleBuilder(value),
+                      subtitle: subtitleBuilder?.call(value),
+                      leading: leadingBuilder?.call(value),
+                      backgroundColorActivated: Styles.cupertinoListTileBackgroundActivated(
+                        context,
+                      ),
+                      onTap:
+                          onSelectedItemChanged != null
+                              ? () => onSelectedItemChanged!(value)
+                              : null,
+                    );
+                  })
+                  .toList(growable: false),
+            ),
+          ),
         );
       default:
-        assert(false, 'Unexpected platform $defaultTargetPlatform');
+        assert(false, 'Unexpected platform ${Theme.of(context).platform}');
         return const SizedBox.shrink();
     }
   }

@@ -1,98 +1,104 @@
+import 'package:chessground/chessground.dart';
+import 'package:dartchess/dartchess.dart';
 import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
-import 'package:chessground/chessground.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
-import 'package:lichess_mobile/src/widgets/platform.dart';
-import 'package:lichess_mobile/src/utils/l10n_context.dart';
-import 'package:lichess_mobile/src/widgets/settings.dart';
 import 'package:lichess_mobile/src/model/settings/board_preferences.dart';
+import 'package:lichess_mobile/src/utils/chessboard.dart';
+import 'package:lichess_mobile/src/utils/l10n_context.dart';
+import 'package:lichess_mobile/src/utils/navigation.dart';
+import 'package:lichess_mobile/src/widgets/list.dart';
+import 'package:lichess_mobile/src/widgets/platform_scaffold.dart';
 
-class PieceSetScreen extends StatelessWidget {
+class PieceSetScreen extends ConsumerStatefulWidget {
   const PieceSetScreen({super.key});
+
+  static Route<dynamic> buildRoute(BuildContext context) {
+    return buildScreenRoute(context, screen: const PieceSetScreen(), title: context.l10n.pieceSet);
+  }
+
+  @override
+  ConsumerState<PieceSetScreen> createState() => _PieceSetScreenState();
+}
+
+class _PieceSetScreenState extends ConsumerState<PieceSetScreen> {
+  bool isLoading = false;
+
+  Future<void> onChanged(PieceSet? value) async {
+    if (value != null) {
+      ref.read(boardPreferencesProvider.notifier).setPieceSet(value);
+      setState(() {
+        isLoading = true;
+      });
+      try {
+        await precachePieceImages(value);
+      } finally {
+        setState(() {
+          isLoading = false;
+        });
+      }
+    }
+  }
+
+  List<AssetImage> getPieceImages(PieceSet set) {
+    return [
+      set.assets[PieceKind.whiteKing]!,
+      set.assets[PieceKind.blackQueen]!,
+      set.assets[PieceKind.whiteRook]!,
+      set.assets[PieceKind.blackBishop]!,
+      set.assets[PieceKind.whiteKnight]!,
+      set.assets[PieceKind.blackPawn]!,
+    ];
+  }
 
   @override
   Widget build(BuildContext context) {
-    return PlatformWidget(
-      androidBuilder: _androidBuilder,
-      iosBuilder: _iosBuilder,
-    );
-  }
-
-  Widget _androidBuilder(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: Text(context.l10n.pieceSet)),
-      body: _Body(),
-    );
-  }
-
-  Widget _iosBuilder(BuildContext context) {
-    return CupertinoPageScaffold(
-      navigationBar: const CupertinoNavigationBar(),
-      child: _Body(),
-    );
-  }
-}
-
-class _Body extends ConsumerWidget {
-  @override
-  Widget build(BuildContext context, WidgetRef ref) {
     final boardPrefs = ref.watch(boardPreferencesProvider);
 
-    List<AssetImage> getPieceImages(PieceSet set) {
-      return [
-        set.assets[PieceKind.whiteKing]!,
-        set.assets[PieceKind.blackQueen]!,
-        set.assets[PieceKind.whiteRook]!,
-        set.assets[PieceKind.blackBishop]!,
-        set.assets[PieceKind.whiteKnight]!,
-        set.assets[PieceKind.blackPawn]!,
-      ];
-    }
-
-    void onChanged(PieceSet? value) => ref
-        .read(boardPreferencesProvider.notifier)
-        .setPieceSet(value ?? PieceSet.cburnett);
-
-    return SafeArea(
-      child: ListView(
-        children: [
-          ChoicePicker(
-            notchedTile: true,
-            tileContentPadding: const EdgeInsets.symmetric(
-              horizontal: 16.0,
-              vertical: 8.0,
-            ),
-            choices: PieceSet.values,
-            selectedItem: boardPrefs.pieceSet,
-            titleBuilder: (t) => Text(t.label),
-            subtitleBuilder: (t) => ConstrainedBox(
-              constraints: const BoxConstraints(
-                maxWidth: 192,
+    return PlatformScaffold(
+      appBarTitle: Text(context.l10n.pieceSet),
+      appBarActions: [if (isLoading) const PlatformAppBarLoadingIndicator()],
+      body: SafeArea(
+        child: ListView.separated(
+          itemCount: PieceSet.values.length,
+          separatorBuilder:
+              (_, __) => PlatformDivider(
+                height: 1,
+                // on iOS: 14 (default indent) + 16 (padding)
+                indent: Theme.of(context).platform == TargetPlatform.iOS ? 14 + 16 : null,
+                color: Theme.of(context).platform == TargetPlatform.iOS ? null : Colors.transparent,
               ),
-              child: Stack(
-                children: [
-                  Image.asset(
-                    "assets/board-thumbnails/${boardPrefs.boardTheme.name}.jpg",
-                    height: 32,
-                    errorBuilder: (context, o, st) => const SizedBox.shrink(),
-                  ),
-                  Row(
-                    children: getPieceImages(t)
-                        .map(
-                          (img) => Image(
-                            image: img,
-                            height: 32,
-                          ),
-                        )
-                        .toList(),
-                  ),
-                ],
+          itemBuilder: (context, index) {
+            final pieceSet = PieceSet.values[index];
+            return PlatformListTile(
+              trailing:
+                  boardPrefs.pieceSet == pieceSet
+                      ? Theme.of(context).platform == TargetPlatform.android
+                          ? const Icon(Icons.check)
+                          : Icon(
+                            CupertinoIcons.check_mark_circled_solid,
+                            color: CupertinoTheme.of(context).primaryColor,
+                          )
+                      : null,
+              title: Text(pieceSet.label),
+              subtitle: ConstrainedBox(
+                constraints: const BoxConstraints(maxWidth: 264),
+                child: Stack(
+                  children: [
+                    boardPrefs.boardTheme.thumbnail,
+                    Row(
+                      children: [
+                        for (final img in getPieceImages(pieceSet)) Image(image: img, height: 44),
+                      ],
+                    ),
+                  ],
+                ),
               ),
-            ),
-            onSelectedItemChanged: onChanged,
-          ),
-        ],
+              onTap: isLoading ? null : () => onChanged(pieceSet),
+              selected: boardPrefs.pieceSet == pieceSet,
+            );
+          },
+        ),
       ),
     );
   }

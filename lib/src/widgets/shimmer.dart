@@ -1,16 +1,14 @@
-import 'package:flutter/foundation.dart';
-import 'package:flutter/cupertino.dart';
+import 'dart:math' show max;
+
 import 'package:flutter/material.dart';
+import 'package:lichess_mobile/src/styles/styles.dart';
 
 class Shimmer extends StatefulWidget {
   static ShimmerState? of(BuildContext context) {
     return context.findAncestorStateOfType<ShimmerState>();
   }
 
-  const Shimmer({
-    super.key,
-    this.child,
-  });
+  const Shimmer({super.key, this.child});
 
   final Widget? child;
 
@@ -22,50 +20,57 @@ class ShimmerState extends State<Shimmer> with SingleTickerProviderStateMixin {
   late AnimationController _shimmerController;
 
   LinearGradient get _defaultGradient {
-    switch (defaultTargetPlatform) {
-      case TargetPlatform.android:
-        final brightness = Theme.of(context).brightness;
-        switch (brightness) {
-          case Brightness.light:
-            return androidLightShimmerGradient;
-          case Brightness.dark:
-            return androidDarkShimmerGradient;
-        }
-      case TargetPlatform.iOS:
-        final brightness =
-            CupertinoTheme.maybeBrightnessOf(context) ?? Brightness.light;
-        switch (brightness) {
-          case Brightness.light:
-            return iOSLightShimmerGradient;
-          case Brightness.dark:
-            return iOSDarkShimmerGradient;
-        }
-      default:
-        throw 'Unexpected platform $defaultTargetPlatform';
+    final brightness = Theme.of(context).brightness;
+    final scaffoldBackgroundColor = Theme.of(context).scaffoldBackgroundColor;
+    final scaffoldOpacity = scaffoldBackgroundColor.a;
+    final effectiveScaffoldBackgroundColor = scaffoldBackgroundColor.withValues(
+      alpha: max(0.2, scaffoldOpacity),
+    );
+    switch (brightness) {
+      case Brightness.light when scaffoldOpacity > 0:
+        return LinearGradient(
+          colors: [
+            darken(effectiveScaffoldBackgroundColor, 0.05),
+            darken(effectiveScaffoldBackgroundColor, 0.1),
+            darken(effectiveScaffoldBackgroundColor, 0.2),
+          ],
+          stops: const [0.1, 0.3, 0.4],
+          begin: const Alignment(-1.0, -0.3),
+          end: const Alignment(1.0, 0.3),
+          tileMode: TileMode.clamp,
+        );
+
+      case _:
+        return LinearGradient(
+          colors: [
+            lighten(effectiveScaffoldBackgroundColor, 0.05),
+            lighten(effectiveScaffoldBackgroundColor, 0.1),
+            lighten(effectiveScaffoldBackgroundColor, 0.2),
+          ],
+          stops: const [0.1, 0.3, 0.4],
+          begin: const Alignment(-1.0, -0.3),
+          end: const Alignment(1.0, 0.3),
+          tileMode: TileMode.clamp,
+        );
     }
   }
 
   LinearGradient get gradient => LinearGradient(
-        colors: _defaultGradient.colors,
-        stops: _defaultGradient.stops,
-        begin: _defaultGradient.begin,
-        end: _defaultGradient.end,
-        transform:
-            _SlidingGradientTransform(slidePercent: _shimmerController.value),
-      );
+    colors: _defaultGradient.colors,
+    stops: _defaultGradient.stops,
+    begin: _defaultGradient.begin,
+    end: _defaultGradient.end,
+    transform: _SlidingGradientTransform(slidePercent: _shimmerController.value),
+  );
 
   Listenable get shimmerChanges => _shimmerController;
 
-  bool get isSized =>
-      (context.findRenderObject() as RenderBox?)?.hasSize ?? false;
+  bool get isSized => (context.findRenderObject() as RenderBox?)?.hasSize ?? false;
 
   // ignore: cast_nullable_to_non_nullable
   Size get size => (context.findRenderObject() as RenderBox).size;
 
-  Offset getDescendantOffset({
-    required RenderBox descendant,
-    Offset offset = Offset.zero,
-  }) {
+  Offset getDescendantOffset({required RenderBox descendant, Offset offset = Offset.zero}) {
     // ignore: cast_nullable_to_non_nullable
     final shimmerBox = context.findRenderObject() as RenderBox;
     return descendant.localToGlobal(offset, ancestor: shimmerBox);
@@ -92,11 +97,7 @@ class ShimmerState extends State<Shimmer> with SingleTickerProviderStateMixin {
 }
 
 class ShimmerLoading extends StatefulWidget {
-  const ShimmerLoading({
-    super.key,
-    required this.isLoading,
-    required this.child,
-  });
+  const ShimmerLoading({super.key, required this.isLoading, required this.child});
 
   final bool isLoading;
   final Widget child;
@@ -140,6 +141,8 @@ class _ShimmerLoadingState extends State<ShimmerLoading> {
       return widget.child;
     }
 
+    final scaffoldOpacity = Theme.of(context).scaffoldBackgroundColor.a;
+
     final shimmer = Shimmer.of(context)!;
     if (!shimmer.isSized) {
       return const SizedBox();
@@ -152,7 +155,7 @@ class _ShimmerLoadingState extends State<ShimmerLoading> {
     );
 
     return ShaderMask(
-      blendMode: BlendMode.srcATop,
+      blendMode: scaffoldOpacity == 0 ? BlendMode.modulate : BlendMode.srcATop,
       shaderCallback: (bounds) {
         return gradient.createShader(
           Rect.fromLTWH(
@@ -168,74 +171,8 @@ class _ShimmerLoadingState extends State<ShimmerLoading> {
   }
 }
 
-const iOSLightShimmerGradient = LinearGradient(
-  colors: [
-    Color(0xFFE3E3E6),
-    Color(0xFFECECEE),
-    Color(0xFFE3E3E6),
-  ],
-  stops: [
-    0.1,
-    0.3,
-    0.4,
-  ],
-  begin: Alignment(-1.0, -0.3),
-  end: Alignment(1.0, 0.3),
-  tileMode: TileMode.clamp,
-);
-
-const iOSDarkShimmerGradient = LinearGradient(
-  colors: [
-    Color(0xFF111111),
-    Color(0xFF1a1a1a),
-    Color(0xFF111111),
-  ],
-  stops: [
-    0.1,
-    0.3,
-    0.4,
-  ],
-  begin: Alignment(-1.0, -0.3),
-  end: Alignment(1.0, 0.3),
-  tileMode: TileMode.clamp,
-);
-
-const androidLightShimmerGradient = LinearGradient(
-  colors: [
-    Color(0xFFE6E6E6),
-    Color(0xFFEFEFEF),
-    Color(0xFFE6E6E6),
-  ],
-  stops: [
-    0.1,
-    0.3,
-    0.4,
-  ],
-  begin: Alignment(-1.0, -0.3),
-  end: Alignment(1.0, 0.3),
-  tileMode: TileMode.clamp,
-);
-
-const androidDarkShimmerGradient = LinearGradient(
-  colors: [
-    Color(0xFF333333),
-    Color(0xFF3c3c3c),
-    Color(0xFF333333),
-  ],
-  stops: [
-    0.1,
-    0.3,
-    0.4,
-  ],
-  begin: Alignment(-1.0, -0.3),
-  end: Alignment(1.0, 0.3),
-  tileMode: TileMode.clamp,
-);
-
 class _SlidingGradientTransform extends GradientTransform {
-  const _SlidingGradientTransform({
-    required this.slidePercent,
-  });
+  const _SlidingGradientTransform({required this.slidePercent});
 
   final double slidePercent;
 

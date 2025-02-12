@@ -1,0 +1,46 @@
+name: Bug Report
+description: Report something not working on the mobile app. See below for the website.
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: |
+        <b>Thank you for reporting an issue. Before submitting, please [search existing issues](https://github.com/lichess-org/mobile/issues) to confirm this is not a duplicate issue.</b>
+  - type: textarea
+    id: desc
+    attributes:
+      label: What is the problem?
+      description: Describe the problem. What did you expect to happen? What happened instead?
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce the bug
+      description: Provide precise step by step instructions on how to reproduce the bug
+      placeholder: |
+        1. Go to ...
+        2. Click ...
+        3. ...
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: App version
+      description: Specify the application version (e.g. 0.7.8).
+    validations:
+      required: true
+  - type: input
+    attributes:
+      label: Device Info
+      description: Specify the device and Operating System you are using the app on (e.g. Pixel 7 / Android 14)
+    validations:
+      required: true
+  - type: textarea
+    attributes:
+      label: Additional information
+      description: |
+        Provide any additional information that will give more context for the issue you are encountering.
+        Screenshots can be added by clicking this area and then pasting or dragging them in.
+    validations:
+      required: false

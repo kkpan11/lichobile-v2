@@ -1,10 +1,9 @@
-import 'package:flutter/widgets.dart';
-import 'package:fast_immutable_collections/fast_immutable_collections.dart';
 import 'package:deep_pick/deep_pick.dart';
-
-import 'package:lichess_mobile/src/styles/lichess_icons.dart';
+import 'package:fast_immutable_collections/fast_immutable_collections.dart';
+import 'package:flutter/widgets.dart';
 import 'package:lichess_mobile/src/model/common/chess.dart';
 import 'package:lichess_mobile/src/model/common/speed.dart';
+import 'package:lichess_mobile/src/styles/lichess_icons.dart';
 
 /// Represents a lichess rating perf item
 enum Perf {
@@ -15,16 +14,17 @@ enum Perf {
   classical('Classical', 'Classical', LichessIcons.classical),
   correspondence('Correspondence', 'Corresp.', LichessIcons.correspondence),
   fromPosition('From Position', 'From Pos.', LichessIcons.feather),
-  chess960('Chess 960', '960', LichessIcons.die_six),
+  chess960('Chess960', '960', LichessIcons.die_six),
   antichess('Antichess', 'Antichess', LichessIcons.antichess),
-  kingOfTheHill('King Of The Hill', 'KotH', LichessIcons.flag),
+  kingOfTheHill('King of the Hill', 'KotH', LichessIcons.flag),
   threeCheck('Three-check', '3check', LichessIcons.three_check),
   atomic('Atomic', 'Atomic', LichessIcons.atom),
   horde('Horde', 'Horde', LichessIcons.horde),
   racingKings('Racing Kings', 'Racing', LichessIcons.racing_kings),
   crazyhouse('Crazyhouse', 'Crazy', LichessIcons.h_square),
   puzzle('Puzzle', 'Puzzle', LichessIcons.target),
-  storm('Storm', 'Storm', LichessIcons.storm);
+  storm('Storm', 'Storm', LichessIcons.storm),
+  streak('Streak', 'Streak', LichessIcons.streak);
 
   const Perf(this.title, this.shortTitle, this.icon);
 
@@ -69,9 +69,15 @@ enum Perf {
         return Perf.crazyhouse;
     }
   }
+
+  static final IMap<String, Perf> nameMap = IMap(Perf.values.asNameMap());
 }
 
-final IMap<String, Perf> perfNameMap = IMap(Perf.values.asNameMap());
+String _titleKey(String title) => title.toLowerCase().replaceAll(RegExp('[ -_]'), '');
+
+final IMap<String, Perf> _lowerCaseTitleMap = Perf.nameMap.map(
+  (key, value) => MapEntry(_titleKey(value.title), value),
+);
 
 extension PerfExtension on Pick {
   Perf asPerfOrThrow() {
@@ -80,13 +86,25 @@ extension PerfExtension on Pick {
       return value;
     }
     if (value is String) {
-      if (perfNameMap.containsKey(value)) {
-        return perfNameMap[value]!;
+      if (Perf.nameMap.containsKey(value)) {
+        return Perf.nameMap[value]!;
+      }
+      // handle lichess api inconsistencies
+      final valueKey = _titleKey(value);
+      if (_lowerCaseTitleMap.containsKey(valueKey)) {
+        return _lowerCaseTitleMap[valueKey]!;
+      }
+      switch (valueKey) {
+        case 'puzzles':
+          return Perf.puzzle;
+      }
+    } else if (value is Map<String, dynamic>) {
+      final perf = Perf.nameMap[value['key'] as String];
+      if (perf != null) {
+        return perf;
       }
     }
-    throw PickException(
-      "value $value at $debugParsingExit can't be casted to Perf",
-    );
+    throw PickException("value $value at $debugParsingExit can't be casted to Perf");
   }
 
   Perf? asPerfOrNull() {

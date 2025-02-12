@@ -1,19 +1,16 @@
-import 'package:collection/collection.dart';
-import 'package:flutter/foundation.dart';
-import 'package:flutter/material.dart';
-import 'package:flutter/cupertino.dart';
 import 'package:chessground/chessground.dart';
+import 'package:collection/collection.dart';
+import 'package:dartchess/dartchess.dart';
+import 'package:fast_immutable_collections/fast_immutable_collections.dart';
+import 'package:flutter/cupertino.dart';
+import 'package:flutter/material.dart';
 import 'package:flutter_riverpod/flutter_riverpod.dart';
-
 import 'package:lichess_mobile/src/constants.dart';
-import 'package:lichess_mobile/src/styles/styles.dart';
 import 'package:lichess_mobile/src/model/settings/board_preferences.dart';
+import 'package:lichess_mobile/src/styles/styles.dart';
+import 'package:lichess_mobile/src/utils/screen.dart';
 import 'package:lichess_mobile/src/view/engine/engine_gauge.dart';
-import 'package:lichess_mobile/src/utils/rate_limit.dart';
-import 'platform.dart';
-
-const _scrollAnimationDuration = Duration(milliseconds: 200);
-const _moveListOpacity = 0.6;
+import 'package:lichess_mobile/src/widgets/move_list.dart';
 
 /// Board layout that adapts to screen size and aspect ratio.
 ///
@@ -25,14 +22,17 @@ const _moveListOpacity = 0.6;
 /// An optional move list can be displayed above the top table space.
 ///
 /// An optional overlay or error message can be displayed on top of the board.
-class BoardTable extends ConsumerWidget {
+class BoardTable extends ConsumerStatefulWidget {
+  /// Creates a board table with the given values.
   const BoardTable({
-    this.onMove,
-    this.onPremove,
-    required this.boardData,
+    required this.fen,
+    required this.orientation,
+    this.gameData,
+    this.lastMove,
     this.boardSettingsOverrides,
-    required this.topTable,
-    required this.bottomTable,
+    this.topTable = const SizedBox.shrink(),
+    this.bottomTable = const SizedBox.shrink(),
+    this.shapes,
     this.engineGauge,
     this.moves,
     this.currentMoveIndex,
@@ -40,18 +40,52 @@ class BoardTable extends ConsumerWidget {
     this.boardOverlay,
     this.errorMessage,
     this.showMoveListPlaceholder = false,
+    this.showEngineGaugePlaceholder = false,
+    this.boardKey,
+    this.zenMode = false,
     super.key,
   }) : assert(
-          moves == null || currentMoveIndex != null,
-          'You must provide `currentMoveIndex` along with `moves`',
-        );
+         moves == null || currentMoveIndex != null,
+         'You must provide `currentMoveIndex` along with `moves`',
+       );
 
-  final void Function(Move, {bool? isDrop, bool? isPremove})? onMove;
-  final void Function(Move?)? onPremove;
+  /// Creates an empty board table (useful for loading).
+  const BoardTable.empty({
+    this.showMoveListPlaceholder = false,
+    this.showEngineGaugePlaceholder = false,
+    this.errorMessage,
+  }) : fen = kEmptyBoardFEN,
+       orientation = Side.white,
+       gameData = null,
+       lastMove = null,
+       boardSettingsOverrides = null,
+       topTable = const SizedBox.shrink(),
+       bottomTable = const SizedBox.shrink(),
+       shapes = null,
+       engineGauge = null,
+       moves = null,
+       currentMoveIndex = null,
+       onSelectMove = null,
+       boardOverlay = null,
+       boardKey = null,
+       zenMode = false;
 
-  final BoardData boardData;
+  final String fen;
+
+  final Side orientation;
+
+  final GameData? gameData;
+
+  final Move? lastMove;
 
   final BoardSettingsOverrides? boardSettingsOverrides;
+
+  final ISet<Shape>? shapes;
+
+  /// [GlobalKey] for the board.
+  ///
+  /// Used to set gestures exclusion on android.
+  final GlobalKey? boardKey;
 
   /// Widget that will appear at the top of the board.
   final Widget topTable;
@@ -80,214 +114,305 @@ class BoardTable extends ConsumerWidget {
   /// Whether to show the move list placeholder. Useful when loading.
   final bool showMoveListPlaceholder;
 
+  /// Whether to show the engine gauge placeholder.
+  final bool showEngineGaugePlaceholder;
+
+  /// If true, the move list will be hidden
+  final bool zenMode;
+
   @override
-  Widget build(BuildContext context, WidgetRef ref) {
+  ConsumerState<BoardTable> createState() => _BoardTableState();
+}
+
+class _BoardTableState extends ConsumerState<BoardTable> {
+  ISet<Shape> userShapes = ISet();
+
+  @override
+  Widget build(BuildContext context) {
     final boardPrefs = ref.watch(boardPreferencesProvider);
 
     return LayoutBuilder(
       builder: (context, constraints) {
-        final aspectRatio = constraints.biggest.aspectRatio;
-        final defaultBoardSize = constraints.biggest.shortestSide;
+        final orientation =
+            constraints.maxWidth > constraints.maxHeight
+                ? Orientation.landscape
+                : Orientation.portrait;
+        final isTablet = isTabletOrLarger(context);
 
-        final isTablet = defaultBoardSize > kTabletThreshold;
-        final boardSize = isTablet
-            ? defaultBoardSize - kTabletBoardTableSidePadding * 2
-            : defaultBoardSize;
-
-        // vertical space left on portrait mode to check if we can display the
-        // move list
-        final verticalSpaceLeftBoardOnPortrait =
-            constraints.biggest.height - boardSize;
-
-        final error = errorMessage != null
-            ? SizedBox.square(
-                dimension: boardSize,
-                child: Center(
-                  child: Padding(
-                    padding: const EdgeInsets.all(16.0),
-                    child: Container(
-                      decoration: BoxDecoration(
-                        color: defaultTargetPlatform == TargetPlatform.iOS
-                            ? CupertinoColors.secondarySystemBackground
-                                .resolveFrom(context)
-                            : Theme.of(context).colorScheme.background,
-                        borderRadius:
-                            const BorderRadius.all(Radius.circular(10.0)),
-                      ),
-                      child: Padding(
-                        padding: const EdgeInsets.all(10.0),
-                        child: Text(errorMessage!),
-                      ),
-                    ),
-                  ),
-                ),
-              )
-            : null;
-
-        final defaultSettings = BoardSettings(
-          pieceAssets: boardPrefs.pieceSet.assets,
-          colorScheme: boardPrefs.boardTheme.colors,
-          showValidMoves: boardPrefs.showLegalMoves,
-          showLastMove: boardPrefs.boardHighlights,
-          enableCoordinates: boardPrefs.coordinates,
-          animationDuration: boardPrefs.pieceAnimationDuration,
+        final defaultSettings = boardPrefs.toBoardSettings().copyWith(
+          borderRadius: isTablet ? Styles.boardBorderRadius : BorderRadius.zero,
+          boxShadow: isTablet ? boardShadows : const <BoxShadow>[],
+          drawShape: DrawShapeOptions(
+            enable: boardPrefs.enableShapeDrawings,
+            onCompleteShape: _onCompleteShape,
+            onClearShapes: _onClearShapes,
+            newShapeColor: boardPrefs.shapeColor.color,
+          ),
         );
 
-        final settings = boardSettingsOverrides != null
-            ? boardSettingsOverrides!.merge(defaultSettings)
-            : defaultSettings;
+        final settings =
+            widget.boardSettingsOverrides != null
+                ? widget.boardSettingsOverrides!.merge(defaultSettings)
+                : defaultSettings;
 
-        final board = Board(
-          size: boardSize,
-          data: boardData,
-          settings: settings,
-          onMove: onMove,
-          onPremove: onPremove,
-        );
+        final shapes = userShapes.union(widget.shapes ?? ISet());
+        final slicedMoves = widget.moves?.asMap().entries.slices(2);
 
-        Widget boardWidget = board;
-
-        if (boardOverlay != null) {
-          boardWidget = SizedBox.square(
-            dimension: boardSize,
-            child: Stack(
+        if (orientation == Orientation.landscape) {
+          final defaultBoardSize =
+              constraints.biggest.shortestSide - (kTabletBoardTableSidePadding * 2);
+          final sideWidth = constraints.biggest.longestSide - defaultBoardSize;
+          final boardSize =
+              sideWidth >= 250
+                  ? defaultBoardSize
+                  : constraints.biggest.longestSide / kGoldenRatio -
+                      (kTabletBoardTableSidePadding * 2);
+          return Padding(
+            padding: const EdgeInsets.all(kTabletBoardTableSidePadding),
+            child: Row(
+              mainAxisSize: MainAxisSize.max,
               children: [
-                board,
-                SizedBox.square(
-                  dimension: boardSize,
-                  child: Center(
-                    child: SizedBox(
-                      width: (boardSize / 8) * 6.6,
-                      height: (boardSize / 8) * 4.6,
-                      child: boardOverlay,
-                    ),
+                _BoardWidget(
+                  size: boardSize,
+                  boardPrefs: boardPrefs,
+                  fen: widget.fen,
+                  orientation: widget.orientation,
+                  gameData: widget.gameData,
+                  lastMove: widget.lastMove,
+                  shapes: shapes,
+                  settings: settings,
+                  boardKey: widget.boardKey,
+                  boardOverlay: widget.boardOverlay,
+                  error: widget.errorMessage,
+                ),
+                if (widget.engineGauge != null) ...[
+                  const SizedBox(width: 4.0),
+                  EngineGauge(
+                    params: widget.engineGauge!,
+                    displayMode: EngineGaugeDisplayMode.vertical,
+                  ),
+                ] else if (widget.showEngineGaugePlaceholder) ...[
+                  const SizedBox(width: kEvalGaugeSize + 4.0),
+                ],
+                const SizedBox(width: 16.0),
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    mainAxisAlignment: MainAxisAlignment.spaceAround,
+                    children: [
+                      widget.topTable,
+                      if (!widget.zenMode && slicedMoves != null)
+                        Expanded(
+                          child: Padding(
+                            padding: const EdgeInsets.symmetric(vertical: 16.0),
+                            child: MoveList(
+                              type: MoveListType.stacked,
+                              slicedMoves: slicedMoves,
+                              currentMoveIndex: widget.currentMoveIndex ?? 0,
+                              onSelectMove: widget.onSelectMove,
+                            ),
+                          ),
+                        )
+                      else
+                        const Spacer(),
+                      widget.bottomTable,
+                    ],
                   ),
                 ),
               ],
             ),
           );
-        } else if (error != null) {
-          boardWidget = SizedBox.square(
-            dimension: boardSize,
-            child: Stack(
-              children: [
-                board,
-                error,
-              ],
-            ),
+        } else {
+          final defaultBoardSize = constraints.biggest.shortestSide;
+          final double boardSize =
+              isTablet ? defaultBoardSize - kTabletBoardTableSidePadding * 2 : defaultBoardSize;
+
+          // vertical space left on portrait mode to check if we can display the
+          // move list
+          final verticalSpaceLeftBoardOnPortrait = constraints.biggest.height - boardSize;
+
+          return Column(
+            mainAxisSize: MainAxisSize.max,
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: [
+              if (!widget.zenMode && slicedMoves != null && verticalSpaceLeftBoardOnPortrait >= 130)
+                MoveList(
+                  type: MoveListType.inline,
+                  slicedMoves: slicedMoves,
+                  currentMoveIndex: widget.currentMoveIndex ?? 0,
+                  onSelectMove: widget.onSelectMove,
+                )
+              else if (widget.showMoveListPlaceholder && verticalSpaceLeftBoardOnPortrait >= 130)
+                const SizedBox(height: 40),
+              Expanded(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: isTablet ? kTabletBoardTableSidePadding : 12.0,
+                  ),
+                  child: widget.topTable,
+                ),
+              ),
+              if (widget.engineGauge != null)
+                Padding(
+                  padding:
+                      isTablet
+                          ? const EdgeInsets.symmetric(horizontal: kTabletBoardTableSidePadding)
+                          : EdgeInsets.zero,
+                  child: EngineGauge(
+                    params: widget.engineGauge!,
+                    displayMode: EngineGaugeDisplayMode.horizontal,
+                  ),
+                )
+              else if (widget.showEngineGaugePlaceholder)
+                const SizedBox(height: kEvalGaugeSize),
+              Padding(
+                padding:
+                    isTablet
+                        ? const EdgeInsets.symmetric(horizontal: kTabletBoardTableSidePadding)
+                        : EdgeInsets.zero,
+                child: _BoardWidget(
+                  size: boardSize,
+                  boardPrefs: boardPrefs,
+                  fen: widget.fen,
+                  orientation: widget.orientation,
+                  gameData: widget.gameData,
+                  lastMove: widget.lastMove,
+                  shapes: shapes,
+                  settings: settings,
+                  boardKey: widget.boardKey,
+                  boardOverlay: widget.boardOverlay,
+                  error: widget.errorMessage,
+                ),
+              ),
+              Expanded(
+                child: Padding(
+                  padding: EdgeInsets.symmetric(
+                    horizontal: isTablet ? kTabletBoardTableSidePadding : 12.0,
+                  ),
+                  child: widget.bottomTable,
+                ),
+              ),
+            ],
           );
         }
-
-        final slicedMoves = moves?.asMap().entries.slices(2);
-
-        return aspectRatio > 1
-            ? Row(
-                mainAxisAlignment: MainAxisAlignment.start,
-                mainAxisSize: MainAxisSize.max,
-                children: [
-                  Padding(
-                    padding: const EdgeInsets.only(
-                      left: kTabletBoardTableSidePadding,
-                      top: kTabletBoardTableSidePadding,
-                      bottom: kTabletBoardTableSidePadding,
-                    ),
-                    child: Row(
-                      children: [
-                        boardWidget,
-                        if (engineGauge != null)
-                          EngineGauge(
-                            params: engineGauge!,
-                            displayMode: EngineGaugeDisplayMode.vertical,
-                          ),
-                      ],
-                    ),
-                  ),
-                  Flexible(
-                    fit: FlexFit.loose,
-                    child: Padding(
-                      padding:
-                          const EdgeInsets.all(kTabletBoardTableSidePadding),
-                      child: Column(
-                        crossAxisAlignment: CrossAxisAlignment.stretch,
-                        mainAxisAlignment: MainAxisAlignment.spaceAround,
-                        children: [
-                          Flexible(child: topTable),
-                          if (slicedMoves != null)
-                            Expanded(
-                              child: Padding(
-                                padding: const EdgeInsets.all(16.0),
-                                child: MoveList(
-                                  type: MoveListType.stacked,
-                                  slicedMoves: slicedMoves,
-                                  currentMoveIndex: currentMoveIndex ?? 0,
-                                  onSelectMove: onSelectMove,
-                                ),
-                              ),
-                            )
-                          else
-                            // same height as [MoveList]
-                            const Expanded(
-                              child: Padding(
-                                padding: EdgeInsets.all(16.0),
-                                child: SizedBox(height: 40),
-                              ),
-                            ),
-                          Flexible(child: bottomTable),
-                        ],
-                      ),
-                    ),
-                  ),
-                ],
-              )
-            : Column(
-                mainAxisSize: MainAxisSize.max,
-                mainAxisAlignment: MainAxisAlignment.center,
-                children: [
-                  if (slicedMoves != null &&
-                      verticalSpaceLeftBoardOnPortrait >= 130)
-                    MoveList(
-                      type: MoveListType.inline,
-                      slicedMoves: slicedMoves,
-                      currentMoveIndex: currentMoveIndex ?? 0,
-                      onSelectMove: onSelectMove,
-                    )
-                  else if (showMoveListPlaceholder &&
-                      verticalSpaceLeftBoardOnPortrait >= 130)
-                    const SizedBox(height: 40),
-                  Expanded(
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal:
-                            isTablet ? kTabletBoardTableSidePadding : 12.0,
-                      ),
-                      child: topTable,
-                    ),
-                  ),
-                  if (engineGauge != null)
-                    Padding(
-                      padding: isTablet
-                          ? const EdgeInsets.symmetric(
-                              horizontal: kTabletBoardTableSidePadding,
-                            )
-                          : EdgeInsets.zero,
-                      child: EngineGauge(
-                        params: engineGauge!,
-                        displayMode: EngineGaugeDisplayMode.horizontal,
-                      ),
-                    ),
-                  boardWidget,
-                  Expanded(
-                    child: Padding(
-                      padding: EdgeInsets.symmetric(
-                        horizontal:
-                            isTablet ? kTabletBoardTableSidePadding : 12.0,
-                      ),
-                      child: bottomTable,
-                    ),
-                  ),
-                ],
-              );
       },
+    );
+  }
+
+  void _onCompleteShape(Shape shape) {
+    if (userShapes.any((element) => element == shape)) {
+      setState(() {
+        userShapes = userShapes.remove(shape);
+      });
+      return;
+    } else {
+      setState(() {
+        userShapes = userShapes.add(shape);
+      });
+    }
+  }
+
+  void _onClearShapes() {
+    setState(() {
+      userShapes = ISet();
+    });
+  }
+}
+
+class _BoardWidget extends StatelessWidget {
+  const _BoardWidget({
+    required this.size,
+    required this.boardPrefs,
+    required this.fen,
+    required this.orientation,
+    required this.gameData,
+    required this.lastMove,
+    required this.shapes,
+    required this.settings,
+    required this.boardOverlay,
+    required this.error,
+    this.boardKey,
+  });
+
+  final double size;
+  final BoardPrefs boardPrefs;
+  final String fen;
+  final Side orientation;
+  final GameData? gameData;
+  final Move? lastMove;
+  final ISet<Shape> shapes;
+  final ChessboardSettings settings;
+  final String? error;
+  final Widget? boardOverlay;
+  final GlobalKey? boardKey;
+
+  @override
+  Widget build(BuildContext context) {
+    final board = Chessboard(
+      key: boardKey,
+      size: size,
+      fen: fen,
+      orientation: orientation,
+      game: gameData,
+      lastMove: lastMove,
+      shapes: shapes,
+      settings: settings,
+    );
+
+    if (boardOverlay != null) {
+      return SizedBox.square(
+        dimension: size,
+        child: Stack(
+          children: [
+            board,
+            SizedBox.square(
+              dimension: size,
+              child: Center(
+                child: SizedBox(
+                  width: (size / 8) * 6.6,
+                  height: (size / 8) * 4.6,
+                  child: boardOverlay,
+                ),
+              ),
+            ),
+          ],
+        ),
+      );
+    } else if (error != null) {
+      return SizedBox.square(
+        dimension: size,
+        child: Stack(children: [board, _ErrorWidget(errorMessage: error!, boardSize: size)]),
+      );
+    }
+
+    return board;
+  }
+}
+
+class _ErrorWidget extends StatelessWidget {
+  const _ErrorWidget({required this.errorMessage, required this.boardSize});
+  final double boardSize;
+  final String errorMessage;
+
+  @override
+  Widget build(BuildContext context) {
+    return SizedBox.square(
+      dimension: boardSize,
+      child: Center(
+        child: Padding(
+          padding: const EdgeInsets.all(16.0),
+          child: Container(
+            decoration: BoxDecoration(
+              color:
+                  Theme.of(context).platform == TargetPlatform.iOS
+                      ? CupertinoColors.secondarySystemBackground.resolveFrom(context)
+                      : ColorScheme.of(context).surface,
+              borderRadius: const BorderRadius.all(Radius.circular(10.0)),
+            ),
+            child: Padding(padding: const EdgeInsets.all(10.0), child: Text(errorMessage)),
+          ),
+        ),
+      ),
     );
   }
 }
@@ -298,278 +423,28 @@ class BoardSettingsOverrides {
     this.autoQueenPromotion,
     this.autoQueenPromotionOnPremove,
     this.blindfoldMode,
+    this.drawShape,
+    this.pieceOrientationBehavior,
+    this.pieceAssets,
   });
 
   final Duration? animationDuration;
   final bool? autoQueenPromotion;
   final bool? autoQueenPromotionOnPremove;
   final bool? blindfoldMode;
+  final DrawShapeOptions? drawShape;
+  final PieceOrientationBehavior? pieceOrientationBehavior;
+  final PieceAssets? pieceAssets;
 
-  BoardSettings merge(BoardSettings settings) {
+  ChessboardSettings merge(ChessboardSettings settings) {
     return settings.copyWith(
       animationDuration: animationDuration,
       autoQueenPromotion: autoQueenPromotion,
       autoQueenPromotionOnPremove: autoQueenPromotionOnPremove,
       blindfoldMode: blindfoldMode,
-    );
-  }
-}
-
-enum MoveListType { inline, stacked }
-
-class MoveList extends StatefulWidget {
-  const MoveList({
-    required this.type,
-    required this.slicedMoves,
-    required this.currentMoveIndex,
-    this.onSelectMove,
-  });
-
-  final MoveListType type;
-
-  final Iterable<List<MapEntry<int, String>>> slicedMoves;
-
-  final int currentMoveIndex;
-  final void Function(int moveIndex)? onSelectMove;
-
-  @override
-  State<MoveList> createState() => _MoveListState();
-}
-
-class _MoveListState extends State<MoveList> {
-  final currentMoveKey = GlobalKey();
-  final _debounce = Debouncer(const Duration(milliseconds: 100));
-
-  @override
-  void initState() {
-    super.initState();
-    WidgetsBinding.instance.addPostFrameCallback((_) {
-      if (currentMoveKey.currentContext != null) {
-        Scrollable.ensureVisible(
-          currentMoveKey.currentContext!,
-          alignment: 0.5,
-        );
-      }
-    });
-  }
-
-  @override
-  void dispose() {
-    _debounce.dispose();
-    super.dispose();
-  }
-
-  @override
-  void didUpdateWidget(covariant MoveList oldWidget) {
-    super.didUpdateWidget(oldWidget);
-    _debounce(() {
-      if (currentMoveKey.currentContext != null) {
-        Scrollable.ensureVisible(
-          currentMoveKey.currentContext!,
-          alignment: 0.5,
-          duration: _scrollAnimationDuration,
-          curve: Curves.easeIn,
-        );
-      }
-    });
-  }
-
-  @override
-  Widget build(BuildContext context) {
-    return widget.type == MoveListType.inline
-        ? Container(
-            padding: const EdgeInsets.only(left: 5),
-            height: 40,
-            width: double.infinity,
-            child: SingleChildScrollView(
-              scrollDirection: Axis.horizontal,
-              child: Row(
-                children: widget.slicedMoves
-                    .mapIndexed(
-                      (index, moves) => Container(
-                        margin: const EdgeInsets.only(right: 10),
-                        child: Row(
-                          children: [
-                            InlineMoveCount(count: index + 1),
-                            ...moves.map(
-                              (move) {
-                                // cursor index starts at 0, move index starts at 1
-                                final isCurrentMove =
-                                    widget.currentMoveIndex == move.key + 1;
-                                return InlineMoveItem(
-                                  key: isCurrentMove ? currentMoveKey : null,
-                                  move: move,
-                                  current: isCurrentMove,
-                                  onSelectMove: widget.onSelectMove,
-                                );
-                              },
-                            ),
-                          ],
-                        ),
-                      ),
-                    )
-                    .toList(growable: false),
-              ),
-            ),
-          )
-        : PlatformCard(
-            child: Padding(
-              padding: const EdgeInsets.all(16.0),
-              child: SingleChildScrollView(
-                child: Column(
-                  children: widget.slicedMoves
-                      .mapIndexed(
-                        (index, moves) => Row(
-                          mainAxisSize: MainAxisSize.max,
-                          mainAxisAlignment: MainAxisAlignment.start,
-                          children: [
-                            StackedMoveCount(count: index + 1),
-                            Expanded(
-                              child: Row(
-                                children: [
-                                  ...moves.map(
-                                    (move) {
-                                      // cursor index starts at 0, move index starts at 1
-                                      final isCurrentMove =
-                                          widget.currentMoveIndex ==
-                                              move.key + 1;
-                                      return Expanded(
-                                        child: StackedMoveItem(
-                                          key: isCurrentMove
-                                              ? currentMoveKey
-                                              : null,
-                                          move: move,
-                                          current: isCurrentMove,
-                                          onSelectMove: widget.onSelectMove,
-                                        ),
-                                      );
-                                    },
-                                  ),
-                                ],
-                              ),
-                            ),
-                          ],
-                        ),
-                      )
-                      .toList(growable: false),
-                ),
-              ),
-            ),
-          );
-  }
-}
-
-class InlineMoveCount extends StatelessWidget {
-  const InlineMoveCount({required this.count});
-
-  final int count;
-
-  @override
-  Widget build(BuildContext context) {
-    return Container(
-      margin: const EdgeInsets.only(right: 3),
-      child: Text(
-        '$count.',
-        style: TextStyle(
-          fontWeight: FontWeight.w600,
-          color: textShade(context, _moveListOpacity),
-        ),
-      ),
-    );
-  }
-}
-
-class InlineMoveItem extends StatelessWidget {
-  const InlineMoveItem({
-    required this.move,
-    this.current,
-    this.onSelectMove,
-    super.key,
-  });
-
-  final MapEntry<int, String> move;
-  final bool? current;
-  final void Function(int moveIndex)? onSelectMove;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onSelectMove != null ? () => onSelectMove!(move.key + 1) : null,
-      child: Container(
-        padding: const EdgeInsets.symmetric(vertical: 3, horizontal: 4),
-        decoration: ShapeDecoration(
-          color: current == true
-              ? defaultTargetPlatform == TargetPlatform.iOS
-                  ? CupertinoDynamicColor.resolve(
-                      CupertinoColors.secondarySystemBackground,
-                      context,
-                    )
-                  : null
-              // TODO add bg color on android
-              : null,
-          shape: const RoundedRectangleBorder(
-            borderRadius: BorderRadius.all(Radius.circular(4.0)),
-          ),
-        ),
-        child: Text(
-          move.value,
-          style: TextStyle(
-            fontWeight: FontWeight.w600,
-            color:
-                current != true ? textShade(context, _moveListOpacity) : null,
-          ),
-        ),
-      ),
-    );
-  }
-}
-
-class StackedMoveCount extends StatelessWidget {
-  const StackedMoveCount({required this.count});
-
-  final int count;
-
-  @override
-  Widget build(BuildContext context) {
-    return SizedBox(
-      width: 40,
-      child: Text(
-        '$count.',
-        style: TextStyle(
-          fontWeight: FontWeight.w600,
-          color: textShade(context, _moveListOpacity),
-        ),
-      ),
-    );
-  }
-}
-
-class StackedMoveItem extends StatelessWidget {
-  const StackedMoveItem({
-    required this.move,
-    this.current,
-    this.onSelectMove,
-    super.key,
-  });
-
-  final MapEntry<int, String> move;
-  final bool? current;
-  final void Function(int moveIndex)? onSelectMove;
-
-  @override
-  Widget build(BuildContext context) {
-    return GestureDetector(
-      onTap: onSelectMove != null ? () => onSelectMove!(move.key + 1) : null,
-      child: Container(
-        padding: const EdgeInsets.all(8),
-        child: Text(
-          move.value,
-          style: TextStyle(
-            fontWeight: current == true ? FontWeight.bold : null,
-            color: current != true ? textShade(context, 0.8) : null,
-          ),
-        ),
-      ),
+      drawShape: drawShape,
+      pieceOrientationBehavior: pieceOrientationBehavior,
+      pieceAssets: pieceAssets,
     );
   }
 }

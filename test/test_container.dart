@@ -1,64 +1,89 @@
-import 'package:flutter_test/flutter_test.dart';
-import 'package:flutter_riverpod/flutter_riverpod.dart';
-import 'package:package_info_plus/package_info_plus.dart';
 import 'package:device_info_plus/device_info_plus.dart';
-import 'package:shared_preferences/shared_preferences.dart';
+import 'package:flutter_riverpod/flutter_riverpod.dart';
 import 'package:flutter_secure_storage/flutter_secure_storage.dart';
-import 'package:fast_immutable_collections/fast_immutable_collections.dart';
-import 'package:mocktail/mocktail.dart';
-import 'package:soundpool/soundpool.dart';
-import 'package:sqflite/sqflite.dart';
-
+import 'package:flutter_test/flutter_test.dart';
+import 'package:http/http.dart' as http;
+import 'package:http/testing.dart';
+import 'package:lichess_mobile/src/constants.dart';
 import 'package:lichess_mobile/src/crashlytics.dart';
-import 'package:lichess_mobile/src/app_dependencies.dart';
-import 'package:lichess_mobile/src/db/shared_preferences.dart';
-import 'package:lichess_mobile/src/model/common/service/sound_service.dart';
-import 'package:lichess_mobile/src/model/auth/auth_repository.dart';
+import 'package:lichess_mobile/src/db/database.dart';
 import 'package:lichess_mobile/src/model/auth/auth_session.dart';
-import 'package:lichess_mobile/src/model/auth/auth_socket.dart';
-import 'package:lichess_mobile/src/model/auth/session_storage.dart';
-import './model/common/service/fake_sound_service.dart';
-import './model/auth/fake_auth_repository.dart';
-import './model/auth/fake_session_storage.dart';
+import 'package:lichess_mobile/src/model/common/preloaded_data.dart';
+import 'package:lichess_mobile/src/model/common/service/sound_service.dart';
+import 'package:lichess_mobile/src/model/notifications/notification_service.dart';
+import 'package:lichess_mobile/src/network/connectivity.dart';
+import 'package:lichess_mobile/src/network/http.dart';
+import 'package:lichess_mobile/src/network/socket.dart';
+import 'package:package_info_plus/package_info_plus.dart';
+import 'package:sqflite_common_ffi/sqflite_ffi.dart';
+
 import './fake_crashlytics.dart';
+import './model/common/service/fake_sound_service.dart';
+import 'binding.dart';
+import 'model/notifications/fake_notification_display.dart';
+import 'network/fake_http_client_factory.dart';
+import 'network/fake_websocket_channel.dart';
+import 'utils/fake_connectivity.dart';
 
-class MockSoundPool extends Mock implements Soundpool {}
+/// A mock client that always returns a 200 empty response.
+final testContainerMockClient = MockClient((request) async {
+  return http.Response('', 200);
+});
 
-class MockDatabase extends Mock implements Database {}
+/// Returns a [ProviderContainer] with the [httpClientFactoryProvider] configured
+/// with the given [mockClient].
+Future<ProviderContainer> lichessClientContainer(MockClient mockClient) async {
+  return makeContainer(
+    overrides: [
+      httpClientFactoryProvider.overrideWith((ref) {
+        return FakeHttpClientFactory(() => mockClient);
+      }),
+    ],
+  );
+}
 
+/// Returns a [ProviderContainer] with default mocks, ready for testing.
 Future<ProviderContainer> makeContainer({
   List<Override>? overrides,
   AuthSessionState? userSession,
 }) async {
-  SharedPreferences.setMockInitialValues({});
-  final sharedPreferences = await SharedPreferences.getInstance();
+  final binding = TestLichessBinding.ensureInitialized();
 
-  FlutterSecureStorage.setMockInitialValues({
-    kSRIStorageKey: 'test',
-  });
-
-  // Logger.root.onRecord.listen((record) {
-  //   if (record.level > Level.WARNING) {
-  //     final time = DateFormat.Hms().format(record.time);
-  //     debugPrint(
-  //       '${record.level.name} at $time [${record.loggerName}] ${record.message}${record.error != null ? '\n${record.error}' : ''}',
-  //     );
-  //   }
-  // });
+  FlutterSecureStorage.setMockInitialValues({kSRIStorageKey: 'test'});
 
   final container = ProviderContainer(
     overrides: [
+      connectivityPluginProvider.overrideWith((_) {
+        return FakeConnectivity();
+      }),
+      notificationDisplayProvider.overrideWith((ref) {
+        return FakeNotificationDisplay();
+      }),
+      databaseProvider.overrideWith((ref) async {
+        final db = await openAppDatabase(databaseFactoryFfi, inMemoryDatabasePath);
+        ref.onDispose(db.close);
+        return db;
+      }),
+      webSocketChannelFactoryProvider.overrideWith((ref) {
+        return FakeWebSocketChannelFactory((_) => FakeWebSocketChannel());
+      }),
+      socketPoolProvider.overrideWith((ref) {
+        final pool = SocketPool(ref);
+        ref.onDispose(pool.dispose);
+        return pool;
+      }),
+      httpClientFactoryProvider.overrideWith((ref) {
+        return FakeHttpClientFactory(() => testContainerMockClient);
+      }),
       crashlyticsProvider.overrideWithValue(FakeCrashlytics()),
       soundServiceProvider.overrideWithValue(FakeSoundService()),
-      sharedPreferencesProvider.overrideWithValue(sharedPreferences),
-      authRepositoryProvider.overrideWithValue(FakeAuthRepository()),
-      sessionStorageProvider.overrideWithValue(FakeSessionStorage()),
-      appDependenciesProvider.overrideWith((ref) {
-        return AppDependencies(
+      preloadedDataProvider.overrideWith((ref) {
+        return (
+          sri: 'test-sri',
           packageInfo: PackageInfo(
             appName: 'lichess_mobile_test',
-            version: 'test',
-            buildNumber: '0.0.0',
+            version: '0.0.0',
+            buildNumber: '0',
             packageName: 'lichess_mobile_test',
           ),
           deviceInfo: BaseDeviceInfo({
@@ -70,18 +95,16 @@ Future<ProviderContainer> makeContainer({
             'identifierForVendor': 'test',
             'isPhysicalDevice': true,
           }),
-          sharedPreferences: sharedPreferences,
-          soundPool: (MockSoundPool(), IMap<Sound, int>(const {})),
           userSession: userSession,
-          database: MockDatabase(),
-          sri: 'test',
-          engineMaxMemoryInMb: 16,
+          engineMaxMemoryInMb: 256,
+          appDocumentsDirectory: null,
         );
       }),
       ...overrides ?? [],
     ],
   );
 
+  addTearDown(binding.reset);
   addTearDown(container.dispose);
 
   return container;

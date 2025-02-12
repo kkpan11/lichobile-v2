@@ -1,29 +1,218 @@
-import 'package:freezed_annotation/freezed_annotation.dart';
+import 'dart:convert';
+
+import 'package:collection/collection.dart';
 import 'package:dartchess/dartchess.dart';
 import 'package:fast_immutable_collections/fast_immutable_collections.dart';
-
+import 'package:freezed_annotation/freezed_annotation.dart';
+import 'package:intl/intl.dart';
+import 'package:lichess_mobile/src/model/account/account_preferences.dart';
 import 'package:lichess_mobile/src/model/common/chess.dart';
+import 'package:lichess_mobile/src/model/common/eval.dart';
 import 'package:lichess_mobile/src/model/common/id.dart';
+import 'package:lichess_mobile/src/model/common/node.dart';
 import 'package:lichess_mobile/src/model/common/perf.dart';
 import 'package:lichess_mobile/src/model/common/speed.dart';
-import 'package:lichess_mobile/src/model/common/time_increment.dart';
-import 'package:lichess_mobile/src/model/account/account_preferences.dart';
-
-import 'player.dart';
-import 'game_status.dart';
-import 'material_diff.dart';
+import 'package:lichess_mobile/src/model/game/game_status.dart';
+import 'package:lichess_mobile/src/model/game/material_diff.dart';
+import 'package:lichess_mobile/src/model/game/player.dart';
+import 'package:lichess_mobile/src/network/http.dart';
 
 part 'game.freezed.dart';
+part 'game.g.dart';
 
+final _dateFormat = DateFormat('yyyy.MM.dd');
+
+/// Common interface for playable and archived games.
 abstract mixin class BaseGame {
+  GameId get id;
+
+  GameMeta get meta;
+
   /// Game steps, cannot be empty.
   IList<GameStep> get steps;
+
+  IList<ExternalEval>? get evals;
+  IList<Duration>? get clocks;
+
+  String? get initialFen;
+
+  GameStatus get status;
+
+  /// Whether the game is properly finished (not aborted).
+  bool get finished => status.value >= GameStatus.mate.value;
+  bool get aborted => status == GameStatus.aborted;
+
+  /// Whether the game is still playable (not finished or aborted and not imported).
+  bool get playable => status.value < GameStatus.aborted.value;
+
+  /// This field is null if the game is being watched as a spectator, and
+  /// represents the side that the current player is playing as otherwise.
+  Side? get youAre;
+
+  Side? get winner;
+
+  bool? get isThreefoldRepetition;
+
+  Player get white;
+  Player get black;
+
+  /// Player of the playing point of view. Null if spectating.
+  Player? get me =>
+      youAre == null
+          ? null
+          : youAre == Side.white
+          ? white
+          : black;
+
+  /// Opponent from the playing point of view. Null if spectating.
+  Player? get opponent =>
+      youAre == null
+          ? null
+          : youAre == Side.white
+          ? black
+          : white;
+
+  Position get lastPosition;
+
+  Side? playerSideOf(UserId id) {
+    if (white.user?.id == id) {
+      return Side.white;
+    } else if (black.user?.id == id) {
+      return Side.black;
+    } else {
+      return null;
+    }
+  }
+
+  Player playerOf(Side side) {
+    return side == Side.white ? white : black;
+  }
+
+  ({PlayerAnalysis white, PlayerAnalysis black})? get serverAnalysis =>
+      white.analysis != null && black.analysis != null
+          ? (white: white.analysis!, black: black.analysis!)
+          : null;
+
+  /// Converts the game to a tree representation
+  Root makeTree() {
+    final initial = steps.first;
+    final root = Root(position: initial.position);
+    Node current = root;
+    final clockIncrement = meta.clock?.increment ?? Duration.zero;
+    Duration? whiteClock;
+    Duration? blackClock;
+    for (var i = 1; i < steps.length; i++) {
+      final step = steps[i];
+      final eval = evals?.elementAtOrNull(i - 1);
+      final pgnEval =
+          eval?.cp != null
+              ? PgnEvaluation.pawns(pawns: cpToPawns(eval!.cp!), depth: eval.depth)
+              : eval?.mate != null
+              ? PgnEvaluation.mate(mate: eval!.mate, depth: eval.depth)
+              : null;
+      final clock = clocks?.elementAtOrNull(i - 1);
+      Duration? emt;
+      if (clock != null) {
+        if (step.position.turn == Side.white) {
+          if (whiteClock != null) {
+            emt = whiteClock + clockIncrement - clock;
+          }
+
+          whiteClock = clock;
+        } else {
+          if (blackClock != null) {
+            emt = blackClock + clockIncrement - clock;
+          }
+          blackClock = clock;
+        }
+      }
+
+      final comment =
+          eval != null || clock != null
+              ? PgnComment(text: eval?.judgment?.comment, clock: clock, emt: emt, eval: pgnEval)
+              : null;
+      final nag = eval?.judgment != null ? _judgmentNameToNag(eval!.judgment!.name) : null;
+      final nextNode = Branch(
+        sanMove: step.sanMove!,
+        position: step.position,
+        lichessAnalysisComments: comment != null ? [comment] : null,
+        nags: nag != null ? [nag] : null,
+      );
+      current.addChild(nextNode);
+
+      // add analysis variation if any
+      final variation = eval?.variation;
+      if (variation != null) {
+        Node variationNode = current;
+        Position position = current.position;
+        final moves = variation.split(' ');
+        for (final san in moves) {
+          final move = position.parseSan(san);
+          position = position.playUnchecked(move!);
+          final child = Branch(sanMove: SanMove(san, move), position: position);
+          variationNode.addChild(child);
+          variationNode = child;
+        }
+      }
+
+      current = nextNode;
+    }
+    return root;
+  }
+
+  int? _judgmentNameToNag(String name) => switch (name) {
+    'Inaccuracy' => 6,
+    'Mistake' => 2,
+    'Blunder' => 4,
+    String() => null,
+  };
+
+  String makePgn() {
+    final node = makeTree();
+    final pgn = node.makePgn(
+      IMap({
+        'Event': '${meta.rated ? 'Rated' : ''} ${meta.perf.title} game',
+        'Site': lichessUri('/$id').toString(),
+        'Date': _dateFormat.format(meta.createdAt),
+        'White':
+            white.user?.name ??
+            white.name ??
+            (white.aiLevel != null ? 'Stockfish level ${white.aiLevel}' : 'Anonymous'),
+        'Black':
+            black.user?.name ??
+            black.name ??
+            (black.aiLevel != null ? 'Stockfish level ${black.aiLevel}' : 'Anonymous'),
+        'Result':
+            status.value >= GameStatus.mate.value
+                ? winner == null
+                    ? '½-½'
+                    : winner == Side.white
+                    ? '1-0'
+                    : '0-1'
+                : '*',
+        if (white.rating != null) 'WhiteElo': white.rating!.toString(),
+        if (black.rating != null) 'BlackElo': black.rating!.toString(),
+        if (white.ratingDiff != null)
+          'WhiteRatingDiff': '${white.ratingDiff! > 0 ? '+' : ''}${white.ratingDiff!}',
+        if (black.ratingDiff != null)
+          'BlackRatingDiff': '${black.ratingDiff! > 0 ? '+' : ''}${black.ratingDiff!}',
+        'Variant': meta.variant.label,
+        if (meta.clock != null)
+          'TimeControl': '${meta.clock!.initial.inSeconds}+${meta.clock!.increment.inSeconds}',
+        if (initialFen != null) 'FEN': initialFen!,
+        if (meta.opening != null) 'ECO': meta.opening!.eco,
+        if (meta.opening != null) 'Opening': meta.opening!.name,
+      }),
+    );
+    return pgn;
+  }
 }
 
 /// A mixin that provides methods to access game data at a specific step.
 mixin IndexableSteps on BaseGame {
-  MaterialDiffSide? materialDiffAt(int cursor, Side side) =>
-      steps[cursor].diff?.bySide(side);
+  String get sanMoves => steps.where((e) => e.sanMove != null).map((e) => e.sanMove!.san).join(' ');
+
+  MaterialDiffSide? materialDiffAt(int cursor, Side side) => steps[cursor].diff?.bySide(side);
 
   GameStep stepAt(int cursor) => steps[cursor];
 
@@ -35,102 +224,24 @@ mixin IndexableSteps on BaseGame {
 
   Position positionAt(int cursor) => steps[cursor].position;
 
-  Duration? whiteClockAt(int cursor) => steps[cursor].whiteClock;
+  Duration? archivedWhiteClockAt(int cursor) => steps[cursor].archivedWhiteClock;
 
-  Duration? blackClockAt(int cursor) => steps[cursor].blackClock;
+  Duration? archivedBlackClockAt(int cursor) => steps[cursor].archivedBlackClock;
 
   Move? get lastMove {
     return steps.last.sanMove?.move;
   }
 
   Position get initialPosition => steps.first.position;
-  int get initialPly => steps.first.ply;
+  int get initialPly => steps.first.position.ply;
 
+  @override
   Position get lastPosition => steps.last.position;
 
-  int get lastPly => steps.last.ply;
+  int get lastPly => steps.last.position.ply;
 
-  MaterialDiffSide? lastMaterialDiffAt(Side side) =>
-      steps.last.diff?.bySide(side);
+  MaterialDiffSide? lastMaterialDiffAt(Side side) => steps.last.diff?.bySide(side);
 }
-
-@freezed
-class PlayableGame with _$PlayableGame, BaseGame, IndexableSteps {
-  const PlayableGame._();
-
-  @Assert('steps.isNotEmpty')
-  factory PlayableGame({
-    required PlayableGameMeta meta,
-    required IList<GameStep> steps,
-    required Player white,
-    required Player black,
-    required GameStatus status,
-    required bool moretimeable,
-    required bool takebackable,
-
-    /// The side that the current player is playing as. This is null if viewing
-    /// the game as a spectator.
-    Side? youAre,
-    GamePrefs? prefs,
-    PlayableClockData? clock,
-    bool? boosted,
-    bool? isThreefoldRepetition,
-    Side? winner,
-    ({Duration idle, Duration timeToMove, DateTime movedAt})? expiration,
-
-    /// The game id of the next game if a rematch has been accepted.
-    GameId? rematch,
-  }) = _PlayableGame;
-
-  /// The side that the current player is playing as. Null if spectating.
-  Player? get player => youAre == Side.white ? white : black;
-
-  /// The side that the current player is playing against. Null if spectating.
-  Player? get opponent => youAre == Side.white ? black : white;
-
-  bool get hasAI => white.isAI || black.isAI;
-
-  bool get isPlayerTurn => lastPosition.turn == youAre;
-  bool get playing => status.value > GameStatus.started.value;
-  bool get finished => status.value >= GameStatus.mate.value;
-  bool get aborted => status == GameStatus.aborted;
-
-  bool get playable => status.value < GameStatus.aborted.value;
-  bool get abortable =>
-      playable &&
-      lastPosition.fullmoves <= 1 &&
-      (meta.rules == null || !meta.rules!.contains(GameRule.noAbort));
-  bool get resignable => playable && !abortable;
-  bool get drawable =>
-      playable &&
-      lastPosition.fullmoves >= 2 &&
-      !(player?.offeringDraw == true) &&
-      !hasAI;
-  bool get rematchable =>
-      meta.rules == null || !meta.rules!.contains(GameRule.noRematch);
-  bool get canTakeback =>
-      takebackable &&
-      playable &&
-      lastPosition.fullmoves >= 2 &&
-      !(player?.proposingTakeback == true) &&
-      !(opponent?.proposingTakeback == true);
-  bool get canGiveTime => moretimeable && playable && clock != null;
-
-  bool get canClaimWin =>
-      opponent?.isGone == true &&
-      !isPlayerTurn &&
-      resignable &&
-      (meta.rules == null || !meta.rules!.contains(GameRule.noClaimWin));
-}
-
-typedef GamePrefs = ({
-  bool showRatings,
-  bool enablePremove,
-  AutoQueen autoQueen,
-  bool confirmResign,
-  bool submitMove,
-  Zen zenMode,
-});
 
 enum GameSource {
   lobby,
@@ -160,119 +271,120 @@ enum GameRule {
 }
 
 @freezed
-class PlayableGameMeta with _$PlayableGameMeta {
-  const PlayableGameMeta._();
+class ServerGamePrefs with _$ServerGamePrefs {
+  const ServerGamePrefs._();
 
-  const factory PlayableGameMeta({
-    required GameId id,
+  const factory ServerGamePrefs({
+    required bool showRatings,
+    required bool enablePremove,
+    required AutoQueen autoQueen,
+    required bool confirmResign,
+    required bool submitMove,
+    required Zen zenMode,
+  }) = _ServerGamePrefs;
+}
+
+@Freezed(fromJson: true, toJson: true)
+class GameMeta with _$GameMeta {
+  const GameMeta._();
+
+  @Assert('!(clock != null && daysPerTurn != null)')
+  const factory GameMeta({
+    required DateTime createdAt,
     required bool rated,
     required Variant variant,
     required Speed speed,
     required Perf perf,
-    required GameSource source,
-    String? initialFen,
+    ({
+      Duration initial,
+      Duration increment,
+
+      /// Remaining time threshold to switch the clock to "emergency" mode.
+      Duration? emergency,
+
+      /// Time added to the clock by the "add more time" button.
+      Duration? moreTime,
+    })?
+    clock,
+    int? daysPerTurn,
     int? startedAtTurn,
     ISet<GameRule>? rules,
-  }) = _PlayableGameMeta;
-}
 
-@freezed
-class PlayableClockData with _$PlayableClockData {
-  const factory PlayableClockData({
-    required Duration initial,
-    required Duration increment,
-    required bool running,
-    required Duration white,
-    required Duration black,
-
-    /// Remaining time threshold to switch the clock to "emergency" mode.
-    Duration? emergency,
-
-    /// Time added to the clock by the "add more time" button.
-    Duration? moreTime,
-  }) = _PlayableClockData;
-}
-
-@freezed
-class ArchivedGameData with _$ArchivedGameData {
-  const ArchivedGameData._();
-
-  const factory ArchivedGameData({
-    required GameId id,
-    required bool rated,
-    required Speed speed,
-    required Perf perf,
-    required DateTime createdAt,
-    required DateTime lastMoveAt,
-    required GameStatus status,
-    required Player white,
-    required Player black,
-    required Variant variant,
+    /// Opening of the game, only available once finished
     LightOpening? opening,
-    String? initialFen,
-    String? lastFen,
-    Side? winner,
-    ClockData? clock,
-  }) = _ArchivedGameData;
 
-  String get clockDisplay {
-    return TimeIncrement(
-      clock?.initial.inSeconds ?? 0,
-      clock?.increment.inSeconds ?? 0,
-    ).display;
-  }
+    /// Game phases of the game, only avaible once finished
+    Division? division,
+  }) = _GameMeta;
+
+  factory GameMeta.fromJson(Map<String, dynamic> json) => _$GameMetaFromJson(json);
 }
 
-@freezed
-class ArchivedGame with _$ArchivedGame, BaseGame, IndexableSteps {
-  const ArchivedGame._();
+@Freezed(fromJson: true, toJson: true)
+class CorrespondenceClockData with _$CorrespondenceClockData {
+  const factory CorrespondenceClockData({required Duration white, required Duration black}) =
+      _CorrespondenceClockData;
 
-  @Assert('steps.isNotEmpty')
-  factory ArchivedGame({
-    required ArchivedGameData data,
-    required IList<GameStep> steps,
-    // IList<MoveAnalysis>? analysis,
-  }) = _ArchivedGame;
-}
-
-@freezed
-class ClockData with _$ClockData {
-  const factory ClockData({
-    required Duration initial,
-    required Duration increment,
-  }) = _ClockData;
+  factory CorrespondenceClockData.fromJson(Map<String, dynamic> json) =>
+      _$CorrespondenceClockDataFromJson(json);
 }
 
 @freezed
 class GameStep with _$GameStep {
   const factory GameStep({
-    required int ply,
     required Position position,
     SanMove? sanMove,
     MaterialDiff? diff,
 
-    /// The remaining white clock time at this step. Only for archived game.
-    Duration? whiteClock,
+    /// The remaining white clock time at this step. Only available when the
+    /// game is finished.
+    Duration? archivedWhiteClock,
 
-    /// The remaining black clock time at this step. Only for archived game.
-    Duration? blackClock,
+    /// The remaining black clock time at this step. Only available when the
+    /// game is finished.
+    Duration? archivedBlackClock,
   }) = _GameStep;
 }
 
-@freezed
-class MoveAnalysis with _$MoveAnalysis {
-  const factory MoveAnalysis({
-    int? eval,
-    UCIMove? best,
-    String? variation,
-    AnalysisJudgment? judgment,
-  }) = _MoveAnalysis;
+/// Converts a list of [GameStep]s to a JSON list.
+String stepsToJson(IList<GameStep> steps) {
+  final objs = steps
+      .mapIndexed(
+        (i, e) => {
+          if (i == 0) 'fen': e.position.fen,
+          if (i == 0) 'rule': e.position.rule.name,
+          'uci': e.sanMove?.move.uci,
+          'san': e.sanMove?.san,
+        },
+      )
+      .toList(growable: false);
+  return jsonEncode(objs);
 }
 
-@freezed
-class AnalysisJudgment with _$AnalysisJudgment {
-  const factory AnalysisJudgment({
-    required String name,
-    required String comment,
-  }) = _AnalysisJugdment;
+/// Converts a JSON list to a list of [GameStep]s.
+IList<GameStep> stepsFromJson(String json) {
+  final objs = jsonDecode(json) as List<dynamic>;
+  final first = objs.first as Map<String, dynamic>;
+  final initialFen = first['fen'] as String;
+  final rule = Rule.values.byName(first['rule'] as String);
+  Position position = Position.setupPosition(rule, Setup.parseFen(initialFen));
+  final List<GameStep> steps = [GameStep(position: position)];
+  for (final obj in objs.skip(1)) {
+    final step = obj as Map<String, dynamic>;
+    final uci = step['uci'] as String?;
+    final san = step['san'] as String?;
+    if (uci == null || san == null) {
+      break;
+    }
+    final move = Move.parse(uci)!;
+    position = position.playUnchecked(move);
+    steps.add(
+      GameStep(
+        position: position,
+        sanMove: SanMove(san, move),
+        diff: MaterialDiff.fromBoard(position.board),
+      ),
+    );
+  }
+  return steps.toIList();
 }

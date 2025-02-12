@@ -1,27 +1,21 @@
 import 'dart:async';
+
 import 'package:async/async.dart';
+import 'package:fast_immutable_collections/fast_immutable_collections.dart';
 import 'package:freezed_annotation/freezed_annotation.dart';
+import 'package:lichess_mobile/src/model/puzzle/puzzle.dart';
+import 'package:lichess_mobile/src/model/puzzle/puzzle_providers.dart';
+import 'package:lichess_mobile/src/model/puzzle/puzzle_repository.dart';
+import 'package:lichess_mobile/src/network/http.dart';
+import 'package:lichess_mobile/src/utils/riverpod.dart';
 import 'package:result_extensions/result_extensions.dart';
 import 'package:riverpod_annotation/riverpod_annotation.dart';
-import 'package:fast_immutable_collections/fast_immutable_collections.dart';
-import 'package:lichess_mobile/src/utils/riverpod.dart';
-import 'package:lichess_mobile/src/model/puzzle/puzzle.dart';
-import 'package:lichess_mobile/src/model/puzzle/puzzle_repository.dart';
 
-part 'puzzle_activity.g.dart';
 part 'puzzle_activity.freezed.dart';
+part 'puzzle_activity.g.dart';
 
 const _nbPerPage = 50;
 const _maxPuzzles = 500;
-
-@Riverpod(keepAlive: true)
-Future<IList<PuzzleHistoryEntry>> puzzleRecentActivity(
-  PuzzleRecentActivityRef ref,
-) {
-  final repo = ref.watch(puzzleRepositoryProvider);
-  // we need to fetch enough puzzles to fill the history screen
-  return Result.release(repo.puzzleActivity(20));
-}
 
 @riverpod
 class PuzzleActivity extends _$PuzzleActivity {
@@ -29,11 +23,20 @@ class PuzzleActivity extends _$PuzzleActivity {
 
   @override
   Future<PuzzleActivityState> build() async {
-    ref.cacheFor(const Duration(minutes: 30));
+    ref.cacheFor(const Duration(minutes: 5));
     ref.onDispose(() {
       _list.clear();
     });
-    _list.addAll(await ref.watch(puzzleRecentActivityProvider.future));
+    final recentActivity = await ref.watch(puzzleRecentActivityProvider.future);
+    if (recentActivity == null) {
+      return const PuzzleActivityState(
+        historyByDay: {},
+        isLoading: false,
+        hasMore: false,
+        hasError: false,
+      );
+    }
+    _list.addAll(recentActivity);
     return PuzzleActivityState(
       historyByDay: _groupByDay(_list),
       isLoading: false,
@@ -42,9 +45,7 @@ class PuzzleActivity extends _$PuzzleActivity {
     );
   }
 
-  Map<DateTime, IList<PuzzleHistoryEntry>> _groupByDay(
-    Iterable<PuzzleHistoryEntry> list,
-  ) {
+  Map<DateTime, IList<PuzzleHistoryEntry>> _groupByDay(Iterable<PuzzleHistoryEntry> list) {
     final map = <DateTime, IList<PuzzleHistoryEntry>>{};
     for (final entry in list) {
       final date = DateTime(entry.date.year, entry.date.month, entry.date.day);
@@ -61,17 +62,16 @@ class PuzzleActivity extends _$PuzzleActivity {
     if (!state.hasValue) return;
 
     final currentVal = state.requireValue;
-    if (_list.length < _maxPuzzles) {
+    if (currentVal.hasMore && _list.length < _maxPuzzles) {
       state = AsyncData(currentVal.copyWith(isLoading: true));
-      ref
-          .read(puzzleRepositoryProvider)
-          .puzzleActivity(_nbPerPage, before: _list.last.date)
-          .fold(
+      Result.capture(
+        ref.withClient(
+          (client) => PuzzleRepository(client).puzzleActivity(_nbPerPage, before: _list.last.date),
+        ),
+      ).fold(
         (value) {
           if (value.isEmpty) {
-            state = AsyncData(
-              currentVal.copyWith(hasMore: false, isLoading: false),
-            );
+            state = AsyncData(currentVal.copyWith(hasMore: false, isLoading: false));
             return;
           }
           _list.addAll(value);
@@ -85,8 +85,7 @@ class PuzzleActivity extends _$PuzzleActivity {
           );
         },
         (error, stackTrace) {
-          state =
-              AsyncData(currentVal.copyWith(isLoading: false, hasError: true));
+          state = AsyncData(currentVal.copyWith(isLoading: false, hasError: true));
         },
       );
     }
